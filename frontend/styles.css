@@ -205,6 +205,10 @@ th {
   font-weight: 700;
 }
 
+.ytd-card {
+  margin-bottom: 1rem;
+}
+
 .chart-wrap {
   border: 1px solid var(--line);
   border-radius: 10px;

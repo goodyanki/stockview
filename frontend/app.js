@@ -167,6 +167,22 @@ function buildYearLabels(snapshots) {
   return labels;
 }
 
+function calcYRange(values) {
+  const real = values.filter((v) => v !== null);
+  if (!real.length) return { min: 0, max: 100 };
+  const latest = real[real.length - 1];
+  const dataMin = Math.min(...real);
+  const dataMax = Math.max(...real);
+  // latest sits at 60% of the visible range
+  const rangeBelow = latest - dataMin;
+  const rangeAbove = (rangeBelow / 0.6) * 0.4;
+  const yMax = Math.max(dataMax, latest + rangeAbove);
+  const yMin = dataMin;
+  // add a small padding
+  const pad = (yMax - yMin) * 0.05 || 100;
+  return { min: Math.floor(yMin - pad), max: Math.ceil(yMax + pad) };
+}
+
 async function loadSnapshotChart() {
   const data = await apiFetch("/api/portfolio/snapshots");
   const yearLabels = buildYearLabels(data);
@@ -174,6 +190,20 @@ async function loadSnapshotChart() {
   data.forEach((d) => { valueMap[d.date] = d.total_value_usd; });
 
   const values = yearLabels.map((date) => valueMap[date] ?? null);
+  const yRange = calcYRange(values);
+
+  // update YTD P&L card
+  if (data.length >= 2) {
+    const initial = data[0].total_value_usd;
+    const latest = data[data.length - 1].total_value_usd;
+    const pnl = latest - initial;
+    const pnlPct = ((pnl / initial) * 100).toFixed(2);
+    const ytdEl = document.getElementById("ytdPnl");
+    if (ytdEl) {
+      ytdEl.className = `value ${pnl >= 0 ? "pnl-pos" : "pnl-neg"}`;
+      ytdEl.textContent = `${pnl >= 0 ? "+" : ""}${formatNumber(pnl)}  (${pnl >= 0 ? "+" : ""}${pnlPct}%)`;
+    }
+  }
 
   const canvas = document.getElementById("snapshotChart");
   const ctx = canvas.getContext("2d");
@@ -181,6 +211,8 @@ async function loadSnapshotChart() {
   if (snapshotChart) {
     snapshotChart.data.labels = yearLabels;
     snapshotChart.data.datasets[0].data = values;
+    snapshotChart.options.scales.y.min = yRange.min;
+    snapshotChart.options.scales.y.max = yRange.max;
     snapshotChart.update();
     return;
   }
@@ -218,7 +250,8 @@ async function loadSnapshotChart() {
         },
         y: {
           title: { display: true, text: "USD" },
-          beginAtZero: false,
+          min: yRange.min,
+          max: yRange.max,
         },
       },
     },
