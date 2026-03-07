@@ -34,10 +34,7 @@ function getViewPassword() {
 }
 
 function getApiBase() {
-  /* Backend is served from the same origin, or fallback to localhost for dev */
-  return window.location.port === "8788"
-    ? "http://localhost:8000"
-    : window.location.origin;
+  return "http://20.189.122.75:8765";
 }
 
 function getAuthHeader() {
