@@ -34,7 +34,7 @@ function getViewPassword() {
 }
 
 function getApiBase() {
-  return "http://20.189.122.75:8765";
+  return "https://api.s747s.com";
 }
 
 function getAuthHeader() {
