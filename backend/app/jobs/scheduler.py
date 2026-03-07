@@ -56,25 +56,10 @@ def start_scheduler() -> None:
         return
 
     scheduler.add_job(
-        lambda: _run_with_session(_sync_longbridge),
-        trigger="interval",
-        minutes=settings.longbridge_sync_minutes,
-        id="sync_longbridge_positions",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        lambda: _run_with_session(_sync_ibkr),
-        trigger="cron",
-        hour=settings.ibkr_sync_hour_utc,
-        minute=0,
-        id="sync_ibkr_flex_daily",
-        replace_existing=True,
-    )
-    scheduler.add_job(
         lambda: _run_with_session(_daily_snapshot),
         trigger="cron",
         hour=settings.ibkr_sync_hour_utc,
-        minute=5,
+        minute=0,
         id="daily_portfolio_snapshot",
         replace_existing=True,
     )

@@ -50,6 +50,6 @@ def ensure_account(db: Session, broker_code: str, account_no: str, account_name:
 def ensure_initial_snapshot(db: Session) -> None:
     existing = db.query(DailySnapshot).first()
     if not existing:
-        db.add(DailySnapshot(date="2025-03-07", total_value_usd=43369.0))
+        db.add(DailySnapshot(date="2026-01-05", total_value_usd=43369.0))
         db.commit()
 
