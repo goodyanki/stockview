@@ -153,15 +153,33 @@ tabs.forEach((tab) => {
 /* ===== Chart ===== */
 let snapshotChart = null;
 
+function buildYearLabels(snapshots) {
+  if (!snapshots.length) return [];
+  const start = new Date(snapshots[0].date);
+  const end = new Date(start);
+  end.setFullYear(end.getFullYear() + 1);
+  const labels = [];
+  const d = new Date(start);
+  while (d <= end) {
+    labels.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+  }
+  return labels;
+}
+
 async function loadSnapshotChart() {
   const data = await apiFetch("/api/portfolio/snapshots");
-  const labels = data.map((d) => d.date);
-  const values = data.map((d) => d.total_value_usd);
+  const yearLabels = buildYearLabels(data);
+  const valueMap = {};
+  data.forEach((d) => { valueMap[d.date] = d.total_value_usd; });
+
+  const values = yearLabels.map((date) => valueMap[date] ?? null);
+
   const canvas = document.getElementById("snapshotChart");
   const ctx = canvas.getContext("2d");
 
   if (snapshotChart) {
-    snapshotChart.data.labels = labels;
+    snapshotChart.data.labels = yearLabels;
     snapshotChart.data.datasets[0].data = values;
     snapshotChart.update();
     return;
@@ -170,7 +188,7 @@ async function loadSnapshotChart() {
   snapshotChart = new Chart(ctx, {
     type: "line",
     data: {
-      labels,
+      labels: yearLabels,
       datasets: [
         {
           label: "账户总额 (USD)",
@@ -179,7 +197,8 @@ async function loadSnapshotChart() {
           backgroundColor: "rgba(0, 89, 184, 0.08)",
           fill: true,
           tension: 0.3,
-          pointRadius: 3,
+          pointRadius: 2,
+          spanGaps: true,
         },
       ],
     },
@@ -187,7 +206,16 @@ async function loadSnapshotChart() {
       responsive: true,
       plugins: { legend: { display: false } },
       scales: {
-        x: { title: { display: true, text: "日期" } },
+        x: {
+          title: { display: true, text: "日期" },
+          ticks: {
+            maxTicksLimit: 12,
+            callback: function (val, idx) {
+              const label = this.getLabelForValue(idx);
+              return label ? label.slice(5) : "";
+            },
+          },
+        },
         y: {
           title: { display: true, text: "USD" },
           beginAtZero: false,
