@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.routes import router as api_router
 from app.core.config import get_settings
-from app.db.init_db import create_tables, ensure_default_brokers
+from app.db.init_db import create_tables, ensure_default_brokers, ensure_initial_snapshot
 from app.db.session import SessionLocal
 from app.jobs.scheduler import start_scheduler, stop_scheduler
 
@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     db: Session = SessionLocal()
     try:
         ensure_default_brokers(db)
+        ensure_initial_snapshot(db)
     finally:
         db.close()
     start_scheduler()

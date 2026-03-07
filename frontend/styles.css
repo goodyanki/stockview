@@ -205,6 +205,14 @@ th {
   font-weight: 700;
 }
 
+.chart-wrap {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
 .pnl-pos {
   color: var(--good);
 }

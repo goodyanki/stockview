@@ -82,3 +82,12 @@ class Report(Base):
 
     account: Mapped["Account"] = relationship(back_populates="reports")
 
+
+class DailySnapshot(Base):
+    __tablename__ = "daily_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    date: Mapped[str] = mapped_column(String(10), unique=True, index=True)  # YYYY-MM-DD
+    total_value_usd: Mapped[float] = mapped_column(Float())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+

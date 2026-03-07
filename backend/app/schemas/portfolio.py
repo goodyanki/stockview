@@ -54,3 +54,10 @@ class PortfolioSummaryOut(BaseModel):
     total_market_value: float
     total_unrealized_pnl: float
 
+
+class DailySnapshotOut(BaseModel):
+    date: str
+    total_value_usd: float
+
+    model_config = {"from_attributes": True}
+

@@ -7,6 +7,7 @@ from app.core.security import require_authenticated
 from app.db.session import get_db
 from app.repositories.portfolio_repository import PortfolioRepository
 from app.schemas.portfolio import (
+    DailySnapshotOut,
     IbkrReportOut,
     LongbridgePositionOut,
     PortfolioSummaryOut,
@@ -54,3 +55,8 @@ def get_summary(db: Session = Depends(get_db)) -> PortfolioSummaryOut:
         total_market_value=payload["total_market_value"],
         total_unrealized_pnl=payload["total_unrealized_pnl"],
     )
+
+
+@router.get("/portfolio/snapshots", response_model=list[DailySnapshotOut])
+def get_snapshots(db: Session = Depends(get_db)) -> list[DailySnapshotOut]:
+    return PortfolioRepository(db).list_daily_snapshots()

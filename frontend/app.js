@@ -150,6 +150,53 @@ tabs.forEach((tab) => {
   tab.addEventListener("click", () => activateTab(tab.dataset.tab));
 });
 
+/* ===== Chart ===== */
+let snapshotChart = null;
+
+async function loadSnapshotChart() {
+  const data = await apiFetch("/api/portfolio/snapshots");
+  const labels = data.map((d) => d.date);
+  const values = data.map((d) => d.total_value_usd);
+  const canvas = document.getElementById("snapshotChart");
+  const ctx = canvas.getContext("2d");
+
+  if (snapshotChart) {
+    snapshotChart.data.labels = labels;
+    snapshotChart.data.datasets[0].data = values;
+    snapshotChart.update();
+    return;
+  }
+
+  snapshotChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "账户总额 (USD)",
+          data: values,
+          borderColor: "#0059b8",
+          backgroundColor: "rgba(0, 89, 184, 0.08)",
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { title: { display: true, text: "日期" } },
+        y: {
+          title: { display: true, text: "USD" },
+          beginAtZero: false,
+        },
+      },
+    },
+  });
+}
+
 /* ===== Data loading ===== */
 async function loadSummary() {
   const data = await apiFetch("/api/portfolio/summary");
@@ -225,7 +272,7 @@ async function loadLongbridgePositions() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadSummary(), loadIbkrReports(), loadLongbridgePositions()]);
+  await Promise.all([loadSummary(), loadIbkrReports(), loadLongbridgePositions(), loadSnapshotChart()]);
 }
 
 /* ===== Sync buttons ===== */

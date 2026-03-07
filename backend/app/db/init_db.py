@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
-from app.db.models import Account, Broker
+from app.db.models import Account, Broker, DailySnapshot
 from app.db.session import engine
 
 
@@ -45,4 +45,11 @@ def ensure_account(db: Session, broker_code: str, account_no: str, account_name:
     db.commit()
     db.refresh(account)
     return account
+
+
+def ensure_initial_snapshot(db: Session) -> None:
+    existing = db.query(DailySnapshot).first()
+    if not existing:
+        db.add(DailySnapshot(date="2025-03-07", total_value_usd=43369.0))
+        db.commit()
 

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.db.models import Position, RawImport, Report
+from app.db.models import DailySnapshot, Position, RawImport, Report
 
 
 class PortfolioRepository:
@@ -124,4 +124,16 @@ class PortfolioRepository:
             "total_unrealized_pnl": total_unrealized_pnl,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    def save_daily_snapshot(self, total_value_usd: float) -> None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        existing = self.db.query(DailySnapshot).filter(DailySnapshot.date == today).first()
+        if existing:
+            existing.total_value_usd = total_value_usd
+        else:
+            self.db.add(DailySnapshot(date=today, total_value_usd=total_value_usd))
+        self.db.commit()
+
+    def list_daily_snapshots(self) -> list[DailySnapshot]:
+        return self.db.query(DailySnapshot).order_by(DailySnapshot.date.asc()).all()
 
