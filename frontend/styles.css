@@ -1,0 +1,319 @@
+:root {
+  --bg-1: #f2efe5;
+  --bg-2: #e4f0ff;
+  --panel: #ffffff;
+  --ink: #182026;
+  --muted: #52606d;
+  --line: #d3dde7;
+  --accent: #0059b8;
+  --accent-soft: #dcecff;
+  --good: #1f8f4a;
+  --bad: #c83d3d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", "Noto Sans SC", sans-serif;
+  color: var(--ink);
+  min-height: 100vh;
+}
+
+.bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 15% 20%, #c9ecff 0%, transparent 35%),
+    radial-gradient(circle at 80% 10%, #ffecc3 0%, transparent 40%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-2));
+}
+
+.app-shell {
+  width: min(1180px, 96vw);
+  margin: 2rem auto;
+  background: color-mix(in srgb, var(--panel), transparent 8%);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  backdrop-filter: blur(4px);
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 1rem 1.25rem;
+  background: #ffffffbc;
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: 0.04em;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.endpoint-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.auth-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.endpoint-control label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.auth-control label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.endpoint-control input {
+  min-width: 280px;
+  max-width: 380px;
+  width: 40vw;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.auth-control input {
+  width: 140px;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+button {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+button:hover {
+  filter: brightness(0.97);
+}
+
+.tabs {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.8rem 1rem 0;
+}
+
+.tab {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: #edf3fa;
+  border-color: transparent;
+}
+
+.tab.active {
+  background: #ffffff;
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.panel {
+  display: none;
+  padding: 1rem;
+}
+
+.panel.active {
+  display: block;
+}
+
+.actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 760px;
+}
+
+th, td {
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+  font-size: 0.92rem;
+}
+
+th {
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: #f8fbff;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 0.7rem 0.8rem;
+}
+
+.card .label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+}
+
+.card .value {
+  margin-top: 0.3rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.pnl-pos {
+  color: var(--good);
+}
+
+.pnl-neg {
+  color: var(--bad);
+}
+
+.status {
+  margin: 0;
+  padding: 0.8rem 1rem 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* Login overlay */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 15% 20%, #c9ecff 0%, transparent 35%),
+    radial-gradient(circle at 80% 10%, #ffecc3 0%, transparent 40%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-2));
+}
+
+.login-box {
+  width: min(380px, 90vw);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 2rem 1.5rem;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+  text-align: center;
+}
+
+.login-box h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.4rem;
+  letter-spacing: 0.04em;
+}
+
+.login-hint {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.login-field {
+  text-align: left;
+  margin-bottom: 1rem;
+}
+
+.login-field label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+
+.login-field input {
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.login-box button {
+  width: 100%;
+  padding: 0.6rem;
+  margin-top: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.login-error {
+  margin: 0.8rem 0 0;
+  min-height: 1.2em;
+  color: var(--bad);
+  font-size: 0.88rem;
+}
+
+.login-overlay.hidden {
+  display: none;
+}
+
+/* Logout button */
+.logout-btn {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.7rem;
+}
+
+@media (max-width: 800px) {
+  .controls,
+  .endpoint-control,
+  .auth-control {
+    width: 100%;
+  }
+  .endpoint-control input {
+    width: 100%;
+    min-width: 0;
+  }
+  .auth-control input {
+    flex: 1 1 46%;
+    min-width: 0;
+  }
+}
