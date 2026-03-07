@@ -61,3 +61,34 @@ class DailySnapshotOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+
+class IbkrLivePositionOut(BaseModel):
+    account_no: str
+    symbol: str
+    market: str
+    quantity: float
+    avg_cost: float
+    last_price: float
+    current_value: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    currency: str
+
+
+class IbkrLiveAccountStatusOut(BaseModel):
+    net_liquidation: float
+    total_cash_value: float
+    buying_power: float
+    available_funds: float
+    gross_position_value: float
+    unrealized_pnl: float
+    realized_pnl: float
+    base_currency: str
+
+
+class IbkrLiveOverviewOut(BaseModel):
+    broker_source: str
+    account_no: str
+    generated_at: datetime
+    account_status: IbkrLiveAccountStatusOut
+    positions: list[IbkrLivePositionOut]

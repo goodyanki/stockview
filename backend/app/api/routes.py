@@ -8,12 +8,14 @@ from app.db.session import get_db
 from app.repositories.portfolio_repository import PortfolioRepository
 from app.schemas.portfolio import (
     DailySnapshotOut,
+    IbkrLiveOverviewOut,
     IbkrReportOut,
     LongbridgePositionOut,
     PortfolioSummaryOut,
     SyncResult,
 )
 from app.services.ibkr_flex_service import IbkrFlexService
+from app.services.ibkr_live_service import IbkrLiveService
 from app.services.longbridge_service import LongbridgeService
 
 router = APIRouter(prefix="/api", tags=["portfolio"], dependencies=[Depends(require_authenticated)])
@@ -60,3 +62,8 @@ def get_summary(db: Session = Depends(get_db)) -> PortfolioSummaryOut:
 @router.get("/portfolio/snapshots", response_model=list[DailySnapshotOut])
 def get_snapshots(db: Session = Depends(get_db)) -> list[DailySnapshotOut]:
     return PortfolioRepository(db).list_daily_snapshots()
+
+
+@router.get("/ibkr/live/overview", response_model=IbkrLiveOverviewOut)
+def get_ibkr_live_overview() -> IbkrLiveOverviewOut:
+    return IbkrLiveService().get_overview()

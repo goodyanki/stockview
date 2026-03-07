@@ -58,6 +58,26 @@ body {
   letter-spacing: 0.04em;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.entry-link {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 0.38rem 0.7rem;
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.entry-link:hover {
+  filter: brightness(0.97);
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -314,6 +334,35 @@ th {
   padding: 0.35rem 0.7rem;
 }
 
+.ibkr-live-shell {
+  width: min(1100px, 96vw);
+}
+
+.ibkr-live-main {
+  padding: 1rem;
+}
+
+.ibkr-live-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.ibkr-live-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.7rem;
+}
+
+.ibkr-live-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 @media (max-width: 800px) {
   .controls,
   .endpoint-control,
@@ -327,5 +376,9 @@ th {
   .auth-control input {
     flex: 1 1 46%;
     min-width: 0;
+  }
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IBKR 实时看板</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div id="loginOverlay" class="login-overlay">
+    <div class="login-box">
+      <h2>IBKR 实时看板</h2>
+      <p class="login-hint">使用首页相同账号登录</p>
+      <div class="login-field">
+        <label for="loginUsername">用户名</label>
+        <input id="loginUsername" type="text" placeholder="请输入用户名" />
+      </div>
+      <div class="login-field">
+        <label for="loginPassword">密码</label>
+        <input id="loginPassword" type="password" placeholder="请输入密码" />
+      </div>
+      <button id="loginBtn">登录</button>
+      <p id="loginError" class="login-error"></p>
+    </div>
+  </div>
+
+  <main id="appMain" class="app-shell ibkr-live-shell" style="display:none;">
+    <header class="topbar">
+      <h1>IBKR 实时看板</h1>
+      <div class="topbar-actions">
+        <a class="entry-link" href="./index.html">返回首页</a>
+        <button id="logoutBtn" class="logout-btn">退出</button>
+      </div>
+    </header>
+
+    <section class="ibkr-live-main">
+      <div class="ibkr-live-head">
+        <p id="accountLabel" class="ibkr-live-subtitle">账户: -</p>
+        <div class="actions">
+          <button id="refreshBtn">刷新</button>
+        </div>
+      </div>
+
+      <div id="accountCards" class="ibkr-live-grid"></div>
+
+      <h2>持仓</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>账户</th>
+              <th>代码</th>
+              <th>市场</th>
+              <th>数量</th>
+              <th>均价</th>
+              <th>最新价</th>
+              <th>市值</th>
+              <th>未实现盈亏</th>
+              <th>盈亏比例</th>
+              <th>币种</th>
+            </tr>
+          </thead>
+          <tbody id="positionTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <p id="statusBar" class="status"></p>
+  </main>
+
+  <script src="./ibkr-live.js"></script>
+</body>
+</html>

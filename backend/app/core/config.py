@@ -38,6 +38,12 @@ class Settings(BaseSettings):
         "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
     )
     ibkr_use_mock: bool = True
+    ibkr_live_host: str = "127.0.0.1"
+    ibkr_live_port: int = 4002
+    ibkr_live_client_id: int = 97
+    ibkr_live_account: str = ""
+    ibkr_live_timeout: float = 6.0
+    ibkr_live_use_mock: bool = True
 
     longbridge_account_no: str = "LONG-001"
     longbridge_account_name: str = "Longbridge Main"

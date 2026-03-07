@@ -38,6 +38,7 @@ uvicorn app.main:app --reload --port 8000
 - `GET /api/positions/longbridge`
 - `POST /api/sync/longbridge`
 - `GET /api/portfolio/summary`
+- `GET /api/ibkr/live/overview`
 
 ## 4. 前端启动
 
@@ -57,6 +58,12 @@ python -m http.server 8788
   - `IBKR_FLEX_TOKEN`
   - `IBKR_FLEX_QUERY_ID`
   - `IBKR_USE_MOCK`
+  - `IBKR_LIVE_HOST`（默认 `127.0.0.1`）
+  - `IBKR_LIVE_PORT`（默认 `4002`）
+  - `IBKR_LIVE_CLIENT_ID`（默认 `97`）
+  - `IBKR_LIVE_ACCOUNT`（可空）
+  - `IBKR_LIVE_TIMEOUT`（默认 `6.0`）
+  - `IBKR_LIVE_USE_MOCK`（默认 `true`）
 - Longbridge:
   - `LONGPORT_TOKEN` 或 `LONGBRIDGE_ACCESS_TOKEN`
   - `LONGPORT_APP_KEY`
@@ -67,4 +74,3 @@ python -m http.server 8788
   - `VIEW_USERNAME`
   - `VIEW_PASSWORD`
   - `BACKEND_API_KEY`（可选）
-
