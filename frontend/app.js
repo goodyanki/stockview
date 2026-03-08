@@ -101,8 +101,8 @@ function showApp() {
 async function attemptLogin(username, password) {
   localStorage.setItem(VIEW_USERNAME_KEY, username);
   localStorage.setItem(VIEW_PASSWORD_KEY, password);
-  /* Verify credentials by calling a protected endpoint */
-  await apiFetch("/api/portfolio/summary");
+  /* Verify credentials with lightweight auth check */
+  await apiFetch("/api/auth/check");
 }
 
 loginBtn.addEventListener("click", async () => {
@@ -387,7 +387,7 @@ async function boot() {
   if (savedUser && savedPass) {
     /* Try auto-login with saved credentials */
     try {
-      await apiFetch("/api/portfolio/summary");
+      await apiFetch("/api/auth/check");
       showApp();
       setStatus("正在加载数据...");
       await refreshAll();
