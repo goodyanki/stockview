@@ -16,6 +16,9 @@ export interface Env {
   IBKR_ACCOUNT_NAME: string;
   IBKR_USE_MOCK: string; // "true" / "false"
 
+  // Twelve Data
+  TWELVE_API_KEY: string;
+
   // Longbridge
   LONGPORT_APP_KEY: string;
   LONGPORT_APP_SECRET: string;

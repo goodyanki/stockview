@@ -4,6 +4,24 @@ import { ensureAccount, addRawImport, replaceIbkrReports } from "../db";
 const FLEX_SEND_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest";
 const FLEX_GET_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement";
 
+export interface IbkrReportRow {
+  report_date: string;
+  symbol: string;
+  quantity: number;
+  avg_cost: number;
+  market_value: number;
+  unrealized_pnl: number;
+  currency: string;
+  parsed_payload: string;
+}
+
+/** Fetch IBKR Flex data from API and return parsed rows (no DB write) */
+export async function fetchIbkrFlex(env: Env): Promise<IbkrReportRow[]> {
+  const xmlPayload = await fetchStatement(env);
+  return parseStatement(xmlPayload);
+}
+
+/** Fetch IBKR Flex data, save to D1, return count */
 export async function syncIbkrFlex(env: Env): Promise<number> {
   const accountId = await ensureAccount(
     env.DB,
@@ -62,28 +80,21 @@ function extractReferenceCode(text: string): string {
   return "";
 }
 
-interface ParsedRow {
-  report_date: string;
-  symbol: string;
-  quantity: number;
-  avg_cost: number;
-  market_value: number;
-  unrealized_pnl: number;
-  currency: string;
-  parsed_payload: string;
-}
-
-function parseStatement(xmlPayload: string): ParsedRow[] {
-  // Use regex-based XML parsing (Workers don't have DOMParser for XML by default)
-  // Extract toDate from FlexStatement
+function parseStatement(xmlPayload: string): IbkrReportRow[] {
   let reportDate = new Date().toISOString();
   const dateMatch = xmlPayload.match(/toDate="([^"]+)"/);
   if (dateMatch) {
-    reportDate = new Date(dateMatch[1]).toISOString();
+    let raw = dateMatch[1];
+    if (/^\d{8}$/.test(raw)) {
+      raw = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+    }
+    const parsed = new Date(raw + "T00:00:00Z");
+    if (!isNaN(parsed.getTime())) {
+      reportDate = parsed.toISOString();
+    }
   }
 
-  const rows: ParsedRow[] = [];
-  // Match self-closing tags with attributes containing symbol and position
+  const rows: IbkrReportRow[] = [];
   const tagRegex = /<(\w+)\s([^>]*?)\/?>/g;
   let match: RegExpExecArray | null;
 
@@ -151,7 +162,7 @@ function mockXml(): string {
 </FlexQueryResponse>`;
 }
 
-function mockRows(): ParsedRow[] {
+function mockRows(): IbkrReportRow[] {
   const now = new Date().toISOString();
   return [
     { report_date: now, symbol: "AAPL", quantity: 20, avg_cost: 170.5, market_value: 3640, unrealized_pnl: 230, currency: "USD", parsed_payload: '{"source":"mock"}' },

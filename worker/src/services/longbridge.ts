@@ -1,22 +1,7 @@
 import { Env, isTruthy } from "../types";
 import { ensureAccount, addRawImport, replaceLongbridgePositions } from "../db";
 
-// Longbridge OpenAPI base URL
-const LB_API_BASE = "https://openapi.longportapp.com/v1";
-
-export async function syncLongbridge(env: Env): Promise<number> {
-  const accountId = await ensureAccount(
-    env.DB,
-    "LONGBRIDGE_OPENAPI",
-    env.LONGBRIDGE_ACCOUNT_NO || "LONG-001",
-    env.LONGBRIDGE_ACCOUNT_NAME || "Longbridge Main"
-  );
-
-  const { positions, quotes, rows } = await buildRows(env);
-  await addRawImport(env.DB, "LONGBRIDGE_OPENAPI", "POSITION", JSON.stringify(positions));
-  await addRawImport(env.DB, "LONGBRIDGE_OPENAPI", "QUOTE", JSON.stringify(quotes));
-  return replaceLongbridgePositions(env.DB, accountId, rows);
-}
+const LB_API_BASE = "https://openapi.longportapp.com";
 
 interface RawPosition {
   symbol: string;
@@ -31,7 +16,7 @@ interface RawQuote {
   last_price: number;
 }
 
-interface PositionRow {
+export interface LongbridgePositionRow {
   symbol: string;
   market: string;
   quantity: number;
@@ -45,7 +30,28 @@ interface PositionRow {
   snapshot_time: string;
 }
 
-async function buildRows(env: Env): Promise<{ positions: RawPosition[]; quotes: Record<string, RawQuote>; rows: PositionRow[] }> {
+/** Fetch Longbridge positions from API and return rows (no DB write) */
+export async function fetchLongbridge(env: Env): Promise<LongbridgePositionRow[]> {
+  const { rows } = await buildRows(env);
+  return rows;
+}
+
+/** Fetch Longbridge data, save to D1, return count */
+export async function syncLongbridge(env: Env): Promise<number> {
+  const accountId = await ensureAccount(
+    env.DB,
+    "LONGBRIDGE_OPENAPI",
+    env.LONGBRIDGE_ACCOUNT_NO || "LONG-001",
+    env.LONGBRIDGE_ACCOUNT_NAME || "Longbridge Main"
+  );
+
+  const { positions, quotes, rows } = await buildRows(env);
+  await addRawImport(env.DB, "LONGBRIDGE_OPENAPI", "POSITION", JSON.stringify(positions));
+  await addRawImport(env.DB, "LONGBRIDGE_OPENAPI", "QUOTE", JSON.stringify(quotes));
+  return replaceLongbridgePositions(env.DB, accountId, rows);
+}
+
+async function buildRows(env: Env): Promise<{ positions: RawPosition[]; quotes: Record<string, RawQuote>; rows: LongbridgePositionRow[] }> {
   let positions: RawPosition[];
   let quotes: Record<string, RawQuote>;
 
@@ -54,12 +60,16 @@ async function buildRows(env: Env): Promise<{ positions: RawPosition[]; quotes: 
     quotes = mockQuotes();
   } else {
     positions = await fetchPositionsApi(env);
-    const symbols = positions.map((p) => p.symbol);
-    quotes = symbols.length > 0 ? await fetchQuotesApi(env, symbols) : {};
+    // Longbridge quote API is WebSocket/Protobuf only, no REST endpoint.
+    // Use cost_price as fallback for last_price.
+    quotes = {};
+    for (const p of positions) {
+      quotes[p.symbol.toUpperCase()] = { symbol: p.symbol, last_price: p.avg_cost };
+    }
   }
 
   const snapshotTime = new Date().toISOString();
-  const rows: PositionRow[] = positions.map((item) => {
+  const rows: LongbridgePositionRow[] = positions.map((item) => {
     const quote = quotes[item.symbol.toUpperCase()] || { last_price: 0 };
     const lastPrice = quote.last_price;
     const currentValue = item.quantity * lastPrice;
@@ -85,21 +95,77 @@ async function buildRows(env: Env): Promise<{ positions: RawPosition[]; quotes: 
   return { positions, quotes, rows };
 }
 
-// --- Longbridge REST API ---
+// --- Longbridge OpenAPI HMAC-SHA256 Auth ---
 
-async function getAuthHeaders(env: Env): Promise<Record<string, string>> {
-  // Longbridge OpenAPI uses Bearer token auth
+async function signRequest(
+  env: Env,
+  method: string,
+  uri: string,
+  queryString: string,
+  body: string
+): Promise<Record<string, string>> {
   const token = env.LONGPORT_TOKEN;
-  if (!token) throw new Error("LONGPORT_TOKEN not configured");
+  const appKey = env.LONGPORT_APP_KEY;
+  const appSecret = env.LONGPORT_APP_SECRET;
+  if (!token || !appKey || !appSecret) {
+    throw new Error("Longbridge credentials not configured (LONGPORT_APP_KEY, LONGPORT_APP_SECRET, LONGPORT_TOKEN)");
+  }
+
+  const timestamp = (Date.now() / 1000).toFixed(3);
+
+  let canonical =
+    `${method.toUpperCase()}|${uri}|${queryString}|` +
+    `authorization:${token}\n` +
+    `x-api-key:${appKey}\n` +
+    `x-timestamp:${timestamp}\n` +
+    `|authorization;x-api-key;x-timestamp|`;
+
+  if (body) {
+    const bodyHash = await sha1Hex(body);
+    canonical += bodyHash;
+  }
+
+  const canonicalHash = await sha1Hex(canonical);
+  const signString = `HMAC-SHA256|${canonicalHash}`;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(appSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(signString));
+  const signature = bufToHex(signatureBuffer);
+
   return {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
+    Authorization: token,
+    "X-Api-Key": appKey,
+    "X-Timestamp": timestamp,
+    "X-Api-Signature": `HMAC-SHA256 SignedHeaders=authorization;x-api-key;x-timestamp, Signature=${signature}`,
+    "Content-Type": "application/json; charset=utf-8",
   };
 }
 
+async function sha1Hex(data: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-1", encoder.encode(data));
+  return bufToHex(hash);
+}
+
+function bufToHex(buf: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// --- API calls ---
+
 async function fetchPositionsApi(env: Env): Promise<RawPosition[]> {
-  const headers = await getAuthHeaders(env);
-  const resp = await fetch(`${LB_API_BASE}/trade/position`, { headers });
+  const uri = "/v1/asset/stock";
+  const headers = await signRequest(env, "GET", uri, "", "");
+  const resp = await fetch(`${LB_API_BASE}${uri}`, { headers });
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`Longbridge positions API failed: ${resp.status} ${text}`);
@@ -109,11 +175,11 @@ async function fetchPositionsApi(env: Env): Promise<RawPosition[]> {
   const positions: RawPosition[] = [];
   const channels = data?.data?.list || [];
   for (const channel of channels) {
-    const items = channel.positions || [];
+    const items = channel.stock_info || channel.positions || [];
     for (const pos of items) {
       positions.push({
         symbol: pos.symbol || "",
-        market: marketStr(pos.market),
+        market: (pos.market || "").toUpperCase(),
         quantity: parseFloat(pos.quantity) || 0,
         avg_cost: parseFloat(pos.cost_price) || 0,
         currency: pos.currency || "USD",
@@ -121,32 +187,6 @@ async function fetchPositionsApi(env: Env): Promise<RawPosition[]> {
     }
   }
   return positions;
-}
-
-async function fetchQuotesApi(env: Env, symbols: string[]): Promise<Record<string, RawQuote>> {
-  const headers = await getAuthHeaders(env);
-  const resp = await fetch(`${LB_API_BASE}/quote/basic?symbol=${symbols.join(",")}`, { headers });
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Longbridge quote API failed: ${resp.status} ${text}`);
-  }
-  const data = (await resp.json()) as any;
-
-  const quoteMap: Record<string, RawQuote> = {};
-  const list = data?.data || [];
-  for (const q of list) {
-    const symbol = (q.symbol || "").toUpperCase();
-    quoteMap[symbol] = {
-      symbol,
-      last_price: parseFloat(q.last_done) || 0,
-    };
-  }
-  return quoteMap;
-}
-
-function marketStr(market: string | undefined): string {
-  if (!market) return "";
-  return market.toUpperCase();
 }
 
 // --- Mock data ---
