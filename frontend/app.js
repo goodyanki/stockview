@@ -298,6 +298,7 @@ async function loadIbkrReports() {
         <td>${item.symbol}</td>
         <td>${formatNumber(item.quantity)}</td>
         <td>${formatNumber(item.avg_cost)}</td>
+        <td>${formatNumber(item.last_price)}</td>
         <td>${formatNumber(item.market_value)}</td>
         <td class="${pnlClass(item.unrealized_pnl)}">${formatNumber(item.unrealized_pnl)}</td>
         <td>${item.currency}</td>
