@@ -1,2 +1,4 @@
 .dev.vars
 backend/venv/
+worker/node_modules/
+worker/.wrangler/

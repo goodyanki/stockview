@@ -1,0 +1,17 @@
+name = "stockview-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "stockview"
+database_id = "094349b5-3f99-43d1-8428-00f6be4acbf4" # fill after `wrangler d1 create stockview`
+
+[vars]
+CORS_ORIGINS = "https://s747s.com,https://stockview.pages.dev"
+
+[triggers]
+crons = ["0 22 * * *"] # daily snapshot at 22:00 UTC
