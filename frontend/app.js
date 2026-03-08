@@ -17,9 +17,7 @@ const ibkrTableBody = document.getElementById("ibkrTableBody");
 const longbridgeTableBody = document.getElementById("longbridgeTableBody");
 
 const syncIbkrBtn = document.getElementById("syncIbkr");
-const refreshIbkrBtn = document.getElementById("refreshIbkr");
 const syncLongbridgeBtn = document.getElementById("syncLongbridge");
-const refreshLongbridgeBtn = document.getElementById("refreshLongbridge");
 
 /* ===== Storage ===== */
 const VIEW_USERNAME_KEY = "portfolio_view_username";
@@ -336,46 +334,24 @@ async function refreshAll() {
   await Promise.all([loadSummary(), loadIbkrReports(), loadLongbridgePositions(), loadSnapshotChart()]);
 }
 
-/* ===== Sync buttons ===== */
+/* ===== Refresh buttons ===== */
 syncIbkrBtn.addEventListener("click", async () => {
-  setStatus("正在同步盈透证券...");
+  setStatus("正在获取盈透行情...");
   try {
-    const result = await apiFetch("/api/sync/ibkr-flex", { method: "POST", body: "{}" });
-    setStatus(`盈透证券同步完成：${result.imported} 条记录`);
     await Promise.all([loadIbkrReports(), loadSummary()]);
+    setStatus("盈透行情已更新");
   } catch (error) {
-    setStatus(`盈透证券同步失败：${error.message}`, true);
-  }
-});
-
-refreshIbkrBtn.addEventListener("click", async () => {
-  setStatus("正在刷新盈透证券...");
-  try {
-    await loadIbkrReports();
-    setStatus("盈透证券已刷新");
-  } catch (error) {
-    setStatus(`盈透证券刷新失败：${error.message}`, true);
+    setStatus(`盈透行情获取失败：${error.message}`, true);
   }
 });
 
 syncLongbridgeBtn.addEventListener("click", async () => {
-  setStatus("正在同步长桥...");
+  setStatus("正在获取长桥行情...");
   try {
-    const result = await apiFetch("/api/sync/longbridge", { method: "POST", body: "{}" });
-    setStatus(`长桥同步完成：${result.imported} 条记录`);
     await Promise.all([loadLongbridgePositions(), loadSummary()]);
+    setStatus("长桥行情已更新");
   } catch (error) {
-    setStatus(`长桥同步失败：${error.message}`, true);
-  }
-});
-
-refreshLongbridgeBtn.addEventListener("click", async () => {
-  setStatus("正在刷新长桥...");
-  try {
-    await loadLongbridgePositions();
-    setStatus("长桥已刷新");
-  } catch (error) {
-    setStatus(`长桥刷新失败：${error.message}`, true);
+    setStatus(`长桥行情获取失败：${error.message}`, true);
   }
 });
 
