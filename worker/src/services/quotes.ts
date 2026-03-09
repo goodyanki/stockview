@@ -1,6 +1,6 @@
 import { Env } from "../types";
 
-const YAHOO_QUOTE_ENDPOINT = "https://query1.finance.yahoo.com/v7/finance/quote";
+const YAHOO_CHART_ENDPOINT = "https://query1.finance.yahoo.com/v8/finance/chart";
 
 /**
  * Fetch delayed market prices from Yahoo Finance.
@@ -125,42 +125,70 @@ async function fetchYahooQuotes(_env: Env, symbols: string[]): Promise<Record<st
   const quotes: Record<string, number> = {};
   const uniqueSymbols = Array.from(new Set(symbols.filter(Boolean)));
 
-  // Keep batch size conservative.
-  for (let i = 0; i < uniqueSymbols.length; i += 50) {
-    const batch = uniqueSymbols.slice(i, i + 50);
-    const url = `${YAHOO_QUOTE_ENDPOINT}?symbols=${encodeURIComponent(batch.join(","))}`;
+  const concurrency = 8;
+  for (let i = 0; i < uniqueSymbols.length; i += concurrency) {
+    const chunk = uniqueSymbols.slice(i, i + concurrency);
+    const pairs = await Promise.all(
+      chunk.map(async (symbol) => {
+        const price = await fetchYahooChartPrice(symbol);
+        return [symbol, price] as const;
+      })
+    );
 
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        console.error(`Yahoo quote request failed (${response.status}) for: ${batch.join(",")}`);
-        continue;
+    for (const [symbol, price] of pairs) {
+      if (price !== undefined) {
+        quotes[symbol] = price;
       }
-
-      const payload = (await response.json()) as any;
-      const results: any[] = payload?.quoteResponse?.result || [];
-      for (const item of results) {
-        const symbol = typeof item?.symbol === "string" ? item.symbol : "";
-        if (!symbol) continue;
-        const price = parseYahooPrice(item);
-        if (price !== undefined) quotes[symbol] = price;
-      }
-    } catch (error) {
-      console.error(`Yahoo quote request failed for: ${batch.join(",")}`, error);
     }
   }
 
   return quotes;
 }
 
+async function fetchYahooChartPrice(symbol: string): Promise<number | undefined> {
+  const url = `${YAHOO_CHART_ENDPOINT}/${encodeURIComponent(symbol)}?interval=1d&range=5d`;
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.error(`Yahoo chart request failed (${response.status}) for: ${symbol}`);
+      return undefined;
+    }
+
+    const payload = (await response.json()) as any;
+    const result = payload?.chart?.result?.[0];
+    if (!result || typeof result !== "object") return undefined;
+
+    return parseYahooPrice(result);
+  } catch (error) {
+    console.error(`Yahoo chart request failed for: ${symbol}`, error);
+    return undefined;
+  }
+}
+
 function parseYahooPrice(payload: Record<string, unknown>): number | undefined {
+  const meta = (payload.meta || {}) as Record<string, unknown>;
+  const indicators = (payload.indicators || {}) as Record<string, unknown>;
+  const quoteList = Array.isArray(indicators.quote) ? indicators.quote : [];
+  const quote0 = (quoteList[0] || {}) as Record<string, unknown>;
+
+  const closeSeries = Array.isArray(quote0.close) ? quote0.close : [];
+  const latestClose = findLastPositiveNumber(closeSeries);
+
   return (
-    toPositiveNumber(payload.regularMarketPrice) ??
-    toPositiveNumber(payload.postMarketPrice) ??
-    toPositiveNumber(payload.preMarketPrice) ??
-    toPositiveNumber(payload.regularMarketPreviousClose) ??
-    toPositiveNumber(payload.previousClose)
+    toPositiveNumber(meta.regularMarketPrice) ??
+    toPositiveNumber(meta.previousClose) ??
+    toPositiveNumber(meta.chartPreviousClose) ??
+    latestClose
   );
+}
+
+function findLastPositiveNumber(items: unknown[]): number | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const value = toPositiveNumber(items[i]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function toPositiveNumber(input: unknown): number | undefined {

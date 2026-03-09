@@ -46,29 +46,60 @@ async function fetchStatement(env: Env): Promise<string> {
     q: env.IBKR_FLEX_QUERY_ID,
     v: "3",
   });
-  const sendResp = await fetch(`${FLEX_SEND_URL}?${sendParams}`, {
+
+  const sendResp = await fetchWithTimeout(`${FLEX_SEND_URL}?${sendParams}`, {
     headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
   });
-  if (!sendResp.ok) throw new Error(`IBKR send request failed: ${sendResp.status}`);
-  const sendText = await sendResp.text();
+  if (sendResp.status === 304) {
+    throw new Error("IBKR send request returned 304 (no data)");
+  }
+  if (!sendResp.ok) {
+    throw new Error(`IBKR send request failed: ${sendResp.status}`);
+  }
 
+  const sendText = await sendResp.text();
   const referenceCode = extractReferenceCode(sendText);
-  if (!referenceCode) throw new Error("IBKR send request failed: missing reference code");
+  if (!referenceCode) {
+    throw new Error("IBKR send request failed: missing reference code");
+  }
 
   for (let i = 0; i < 5; i++) {
     const getParams = new URLSearchParams({ t: env.IBKR_FLEX_TOKEN, q: referenceCode, v: "3" });
-    const result = await fetch(`${FLEX_GET_URL}?${getParams}`, {
+    const result = await fetchWithTimeout(`${FLEX_GET_URL}?${getParams}`, {
       headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
     });
-    if (!result.ok) throw new Error(`IBKR get statement failed: ${result.status}`);
+
+    if (result.status === 304) {
+      throw new Error("IBKR get statement returned 304 (no data)");
+    }
+    if (!result.ok) {
+      throw new Error(`IBKR get statement failed: ${result.status}`);
+    }
+
     const text = await result.text();
     if (text.includes("Statement generation in progress")) {
-      await new Promise((r) => setTimeout(r, 2000));
+      await sleep(2000);
       continue;
     }
+
     return text;
   }
-  throw new Error("IBKR statement still in progress after retries");
+
+  throw new Error("IBKR statement still in progress");
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 20_000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function extractReferenceCode(text: string): string {
@@ -81,177 +112,140 @@ function extractReferenceCode(text: string): string {
 }
 
 function parseStatement(xmlPayload: string): IbkrReportRow[] {
-  const reportDate = extractReportDate(xmlPayload);
-
-  // Primary parser: only tags that clearly represent open positions.
-  const strictRows = parseStatementWithRegex(xmlPayload, reportDate, true);
-  if (strictRows.length > 0) return strictRows;
-
-  // Fallback parser: allow generic "position" tags for unusual Flex exports.
-  const fallbackRows = parseStatementWithRegex(xmlPayload, reportDate, false);
-  if (fallbackRows.length > 0) return fallbackRows;
-
-  return mockRows();
-}
-
-function extractReportDate(xmlPayload: string): string {
-  const nowIso = new Date().toISOString();
-  const patterns = [/toDate="([^"]+)"/i, /toDate='([^']+)'/i];
-
-  for (const pattern of patterns) {
-    const match = xmlPayload.match(pattern);
-    if (!match) continue;
-    const parsed = parseDateToIso(match[1]);
-    if (parsed) return parsed;
-  }
-
-  return nowIso;
-}
-
-function parseStatementWithRegex(xmlPayload: string, reportDate: string, strictOpenPositionOnly: boolean): IbkrReportRow[] {
-  const rows: IbkrReportRow[] = [];
-  const tagRegex = /<([A-Za-z0-9_:.:-]+)\b([^>]*)\/?>/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = tagRegex.exec(xmlPayload)) !== null) {
-    const tag = match[1].toLowerCase();
-    const accepted = strictOpenPositionOnly ? isOpenPositionTag(tag) : isLikelyPositionTag(tag);
-    if (!accepted) continue;
-
-    const attrs = parseAttributes(match[2]);
-    const row = buildIbkrRow(attrs, reportDate);
-    if (row) rows.push(row);
-  }
-
-  return mergeRowsBySymbolCurrency(rows);
-}
-
-function isLikelyPositionTag(tag: string): boolean {
-  return tag.includes("openposition") || tag.endsWith(":openposition") || tag === "position";
-}
-
-function isOpenPositionTag(tag: string): boolean {
-  return tag.includes("openposition") || tag.endsWith(":openposition");
-}
-
-function parseAttributes(attrString: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  const attrRegex = /([A-Za-z0-9_:.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-  let m: RegExpExecArray | null;
-  while ((m = attrRegex.exec(attrString)) !== null) {
-    const key = m[1].toLowerCase();
-    const value = (m[2] ?? m[3] ?? "").trim();
-    attrs[key] = value;
-  }
-  return attrs;
-}
-
-function buildIbkrRow(attrs: Record<string, string>, reportDate: string): IbkrReportRow | null {
-  const symbol = normalizeSymbol(attrs.symbol || attrs.underlyingsymbol || "");
-  const quantityRaw = attrs.position || attrs.quantity || attrs.qty;
-  if (!symbol || quantityRaw === undefined) return null;
-
-  const quantity = toFloat(quantityRaw);
-  if (!Number.isFinite(quantity) || quantity === 0) return null;
-
-  const costBasisPrice = toFloat(attrs.costbasisprice || attrs.avgcost || attrs.avg_price);
-  const totalCost = toFloat(attrs.costbasismoney || attrs.costbasis);
-  const avgCost = costBasisPrice || (quantity ? totalCost / quantity : 0);
-
-  const marketValue = toFloat(attrs.positionvalue || attrs.marketvalue || attrs.currentvalue);
-  const unrealizedPnl = toFloat(attrs.fifopnlunrealized || attrs.unrealizedpl || attrs.unrealized_pnl);
-  const currency = (attrs.currency || "USD").trim().toUpperCase();
-
-  return {
-    report_date: reportDate,
-    symbol,
-    quantity,
-    avg_cost: avgCost,
-    market_value: marketValue,
-    unrealized_pnl: unrealizedPnl,
-    currency,
-    parsed_payload: JSON.stringify(attrs),
-  };
-}
-
-function mergeRowsBySymbolCurrency(rows: IbkrReportRow[]): IbkrReportRow[] {
-  const merged = new Map<string, IbkrReportRow>();
-
-  for (const row of rows) {
-    const key = `${row.symbol}||${row.currency}`;
-    const current = merged.get(key);
-    if (!current) {
-      merged.set(key, { ...row });
-      continue;
+  try {
+    const domParserCtor = (globalThis as unknown as { DOMParser?: new () => any }).DOMParser;
+    if (!domParserCtor) {
+      return mockRows();
     }
 
-    const currentCostValue = current.avg_cost * current.quantity;
-    const incomingCostValue = row.avg_cost * row.quantity;
-    const mergedQty = current.quantity + row.quantity;
-
-    current.quantity = mergedQty;
-    if (mergedQty !== 0) {
-      current.avg_cost = (currentCostValue + incomingCostValue) / mergedQty;
+    const parser = new domParserCtor();
+    const doc = parser.parseFromString(xmlPayload, "text/xml");
+    const parserErrors = doc.getElementsByTagName("parsererror");
+    if (parserErrors && parserErrors.length > 0) {
+      return mockRows();
     }
-    current.market_value += row.market_value;
-    current.unrealized_pnl += row.unrealized_pnl;
+
+    let reportDate = new Date().toISOString();
+    const flexStatements = doc.getElementsByTagName("FlexStatement");
+    if (flexStatements && flexStatements.length > 0) {
+      const rawDate = flexStatements[0].getAttribute("toDate");
+      if (rawDate) {
+        const parsed = parseReportDate(rawDate);
+        if (parsed) reportDate = parsed;
+      }
+    }
+
+    const parsedRows: IbkrReportRow[] = [];
+    const nodes = doc.getElementsByTagName("*");
+
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const { raw, lower } = readNodeAttributes(node);
+      if (Object.keys(lower).length === 0) continue;
+
+      const symbol = lower.symbol || lower.underlyingsymbol;
+      const quantityRaw = lower.position || lower.quantity || lower.qty;
+      if (!symbol || quantityRaw === undefined) continue;
+
+      const quantity = toFloat(quantityRaw);
+      const costBasisPrice = toFloat(lower.costbasisprice || lower.avgcost || lower.avg_price);
+      const totalCost = toFloat(lower.costbasismoney || lower.costbasis);
+      const avgCost = costBasisPrice || (quantity ? totalCost / quantity : 0);
+      const marketValue = toFloat(lower.positionvalue || lower.marketvalue || lower.currentvalue);
+      const unrealizedPnl = toFloat(lower.fifopnlunrealized || lower.unrealizedpl || lower.unrealized_pnl);
+      const currency = lower.currency || "USD";
+
+      parsedRows.push({
+        report_date: reportDate,
+        symbol,
+        quantity,
+        avg_cost: avgCost,
+        market_value: marketValue,
+        unrealized_pnl: unrealizedPnl,
+        currency,
+        parsed_payload: JSON.stringify(raw),
+      });
+    }
+
+    return parsedRows.length > 0 ? parsedRows : mockRows();
+  } catch {
+    return mockRows();
+  }
+}
+
+function readNodeAttributes(node: any): { raw: Record<string, string>; lower: Record<string, string> } {
+  const raw: Record<string, string> = {};
+  const lower: Record<string, string> = {};
+
+  const attrs = node?.attributes;
+  if (!attrs || typeof attrs.length !== "number") {
+    return { raw, lower };
   }
 
-  return Array.from(merged.values());
+  for (let i = 0; i < attrs.length; i++) {
+    const attr = attrs[i];
+    const name = String(attr?.name || "");
+    const value = String(attr?.value || "");
+    if (!name) continue;
+    raw[name] = value;
+    lower[name.toLowerCase()] = value;
+  }
+
+  return { raw, lower };
 }
 
-function normalizeSymbol(raw: string): string {
-  return raw.replace(/\s+/g, " ").trim().toUpperCase();
-}
-
-function parseDateToIso(raw: string): string | null {
+function parseReportDate(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  if (/^\d{8}$/.test(trimmed)) {
-    const normalized = `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
-    const parsed = new Date(`${normalized}T00:00:00Z`);
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-  }
+  const isoLike = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T00:00:00Z`)
+    : new Date(trimmed);
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const parsed = new Date(`${trimmed}T00:00:00Z`);
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-  }
-
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
-    const [mm, dd, yyyy] = trimmed.split("/");
-    const normalized = `${yyyy}-${mm}-${dd}`;
-    const parsed = new Date(`${normalized}T00:00:00Z`);
-    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-  }
-
-  const parsed = new Date(trimmed);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  return Number.isNaN(isoLike.getTime()) ? null : isoLike.toISOString();
 }
 
 function toFloat(value: string | undefined): number {
   if (!value) return 0;
   const num = parseFloat(value.replace(/,/g, ""));
-  return isNaN(num) ? 0 : num;
+  return Number.isNaN(num) ? 0 : num;
 }
 
 function mockXml(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
   <FlexStatements>
-    <FlexStatement toDate="${new Date().toISOString().slice(0, 10)}">
+    <FlexStatement toDate="2026-03-07">
       <OpenPosition symbol="AAPL" position="20" costBasisPrice="170.5" marketValue="3640" fifoPnlUnrealized="230" currency="USD"/>
       <OpenPosition symbol="MSFT" position="8" costBasisPrice="390.3" marketValue="3240" fifoPnlUnrealized="118" currency="USD"/>
     </FlexStatement>
   </FlexStatements>
-</FlexQueryResponse>`;
+</FlexQueryResponse>
+`;
 }
 
 function mockRows(): IbkrReportRow[] {
   const now = new Date().toISOString();
   return [
-    { report_date: now, symbol: "AAPL", quantity: 20, avg_cost: 170.5, market_value: 3640, unrealized_pnl: 230, currency: "USD", parsed_payload: '{"source":"mock"}' },
-    { report_date: now, symbol: "MSFT", quantity: 8, avg_cost: 390.3, market_value: 3240, unrealized_pnl: 118, currency: "USD", parsed_payload: '{"source":"mock"}' },
+    {
+      report_date: now,
+      symbol: "AAPL",
+      quantity: 20,
+      avg_cost: 170.5,
+      market_value: 3640,
+      unrealized_pnl: 230,
+      currency: "USD",
+      parsed_payload: '{"source":"mock"}',
+    },
+    {
+      report_date: now,
+      symbol: "MSFT",
+      quantity: 8,
+      avg_cost: 390.3,
+      market_value: 3240,
+      unrealized_pnl: 118,
+      currency: "USD",
+      parsed_payload: '{"source":"mock"}',
+    },
   ];
 }
