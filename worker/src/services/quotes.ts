@@ -2,11 +2,6 @@ import { Env } from "../types";
 
 const TWELVE_DATA_BASE = "https://api.twelvedata.com";
 
-export interface QuoteResult {
-  symbol: string;
-  price: number;
-}
-
 /**
  * Fetch real-time prices from Twelve Data API.
  * Accepts symbols in any format (IBKR or Longbridge) and normalizes them.
@@ -15,54 +10,52 @@ export interface QuoteResult {
 export async function fetchQuotes(env: Env, symbols: string[]): Promise<Record<string, number>> {
   if (!env.TWELVE_API_KEY || symbols.length === 0) return {};
 
-  // Build mapping: twelveDataSymbol -> originalSymbol[]
   const tdToOriginal: Record<string, string[]> = {};
-  for (const sym of symbols) {
-    const tdSym = toTwelveDataSymbol(sym);
-    if (!tdSym) continue; // skip unsupported (e.g. options)
-    if (!tdToOriginal[tdSym]) tdToOriginal[tdSym] = [];
-    tdToOriginal[tdSym].push(sym);
+  for (const symbol of symbols) {
+    const normalized = toTwelveDataSymbol(symbol);
+    if (!normalized) continue;
+    if (!tdToOriginal[normalized]) tdToOriginal[normalized] = [];
+    tdToOriginal[normalized].push(symbol);
   }
 
   const tdSymbols = Object.keys(tdToOriginal);
-  if (tdSymbols.length === 0) return {};
+  const tdQuotes = await fetchTwelveQuotes(env, tdSymbols);
 
-  // Twelve Data supports comma-separated symbols in /quote
-  const priceMap: Record<string, number> = {};
+  const mapped: Record<string, number> = {};
+  for (const [tdSymbol, originals] of Object.entries(tdToOriginal)) {
+    const price = tdQuotes[tdSymbol];
+    if (price === undefined) continue;
+    for (const original of originals) mapped[original] = price;
+  }
+  return mapped;
+}
 
-  // Batch in groups of 8 to stay within rate limits
-  for (let i = 0; i < tdSymbols.length; i += 8) {
-    const batch = tdSymbols.slice(i, i + 8);
-    const url = `${TWELVE_DATA_BASE}/quote?symbol=${encodeURIComponent(batch.join(","))}&apikey=${env.TWELVE_API_KEY}`;
+/** Fetch FX rates to USD. Example: HKD -> HKD/USD */
+export async function fetchFxToUsd(env: Env, currencies: string[]): Promise<Record<string, number>> {
+  const rates: Record<string, number> = { USD: 1 };
+  if (!env.TWELVE_API_KEY || currencies.length === 0) return rates;
 
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) continue;
-      const data = (await resp.json()) as any;
+  const normalized = Array.from(
+    new Set(currencies.map((currency) => currency.trim().toUpperCase()).filter(Boolean))
+  );
 
-      if (batch.length === 1) {
-        // Single symbol: response is the quote object directly
-        const price = parseFloat(data.close) || parseFloat(data.previous_close) || 0;
-        for (const orig of tdToOriginal[batch[0]] || []) {
-          priceMap[orig] = price;
-        }
-      } else {
-        // Multiple symbols: response is keyed by symbol
-        for (const tdSym of batch) {
-          const quote = data[tdSym];
-          if (!quote || quote.status === "error") continue;
-          const price = parseFloat(quote.close) || parseFloat(quote.previous_close) || 0;
-          for (const orig of tdToOriginal[tdSym] || []) {
-            priceMap[orig] = price;
-          }
-        }
-      }
-    } catch (e) {
-      console.error(`Twelve Data fetch failed for batch ${batch.join(",")}`, e);
+  const tdToCurrency: Record<string, string> = {};
+  for (const currency of normalized) {
+    if (currency === "USD") continue;
+    tdToCurrency[`${currency}/USD`] = currency;
+  }
+
+  const tdSymbols = Object.keys(tdToCurrency);
+  const tdQuotes = await fetchTwelveQuotes(env, tdSymbols);
+
+  for (const [tdSymbol, currency] of Object.entries(tdToCurrency)) {
+    const rate = tdQuotes[tdSymbol];
+    if (rate !== undefined) {
+      rates[currency] = rate;
     }
   }
 
-  return priceMap;
+  return rates;
 }
 
 /**
@@ -89,4 +82,69 @@ function toTwelveDataSymbol(symbol: string): string | null {
 
   // Plain symbol (IBKR stocks/ETFs)
   return symbol;
+}
+
+async function fetchTwelveQuotes(env: Env, symbols: string[]): Promise<Record<string, number>> {
+  if (!env.TWELVE_API_KEY || symbols.length === 0) return {};
+
+  const quotes: Record<string, number> = {};
+
+  // Keep batch size conservative for API limits.
+  for (let i = 0; i < symbols.length; i += 8) {
+    const batch = symbols.slice(i, i + 8);
+    const url = `${TWELVE_DATA_BASE}/quote?symbol=${encodeURIComponent(batch.join(","))}&apikey=${env.TWELVE_API_KEY}`;
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.error(`Twelve Data quote request failed (${response.status}) for: ${batch.join(",")}`);
+        continue;
+      }
+
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (batch.length === 1) {
+        const symbol = batch[0];
+        const price = parseQuotePrice(payload);
+        if (price !== undefined) {
+          quotes[symbol] = price;
+        }
+        continue;
+      }
+
+      for (const symbol of batch) {
+        const quote = payload[symbol];
+        if (!quote || typeof quote !== "object") continue;
+        const price = parseQuotePrice(quote as Record<string, unknown>);
+        if (price !== undefined) {
+          quotes[symbol] = price;
+        }
+      }
+    } catch (error) {
+      console.error(`Twelve Data quote request failed for: ${batch.join(",")}`, error);
+    }
+  }
+
+  return quotes;
+}
+
+function parseQuotePrice(payload: Record<string, unknown>): number | undefined {
+  const status = payload.status;
+  if (typeof status === "string" && status.toLowerCase() === "error") {
+    return undefined;
+  }
+
+  const close = toPositiveNumber(payload.close);
+  if (close !== undefined) return close;
+
+  const price = toPositiveNumber(payload.price);
+  if (price !== undefined) return price;
+
+  return toPositiveNumber(payload.previous_close);
+}
+
+function toPositiveNumber(input: unknown): number | undefined {
+  if (typeof input !== "string" && typeof input !== "number") return undefined;
+  const parsed = Number(input);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
 }

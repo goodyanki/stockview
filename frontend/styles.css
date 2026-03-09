@@ -245,6 +245,11 @@ th {
   color: var(--bad);
 }
 
+.missing-value {
+  color: var(--muted);
+  font-style: italic;
+}
+
 .status {
   margin: 0;
   padding: 0.8rem 1rem 1rem;

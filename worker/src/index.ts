@@ -4,10 +4,28 @@ import { Env } from "./types";
 import { authMiddleware } from "./auth";
 import { fetchIbkrFlex, syncIbkrFlex, IbkrReportRow } from "./services/ibkr-flex";
 import { fetchLongbridge, syncLongbridge, LongbridgePositionRow } from "./services/longbridge";
-import { fetchQuotes } from "./services/quotes";
+import { fetchFxToUsd, fetchQuotes } from "./services/quotes";
 import { dailySnapshot } from "./services/snapshot";
 
 const app = new Hono<{ Bindings: Env }>();
+
+type BrokerSource = "IBKR_FLEX" | "LONGBRIDGE_OPENAPI";
+
+interface HoldingInput {
+  broker_source: BrokerSource;
+  symbol: string;
+  quantity: number;
+  avg_cost: number;
+  currency: string;
+}
+
+interface BrokerAggregate {
+  broker_source: BrokerSource;
+  total_market_value_usd: number;
+  total_unrealized_pnl_usd: number;
+  total_positions: number;
+  priced_positions: number;
+}
 
 // --- CORS ---
 app.use("*", async (c, next) => {
@@ -35,37 +53,75 @@ app.use("/api/*", authMiddleware);
 // --- Auth check (lightweight, no external calls) ---
 app.get("/api/auth/check", (c) => c.json({ ok: true }));
 
+function normalizeCurrency(currency: string | undefined): string {
+  const value = (currency || "").trim().toUpperCase();
+  return value || "USD";
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 // --- IBKR Reports (real-time from IBKR Flex API + Twelve Data prices) ---
 app.get("/api/reports/ibkr", async (c) => {
   try {
     const rows = await fetchIbkrFlex(c.env);
-    const symbols = rows.map((r) => r.symbol);
-    const prices = await fetchQuotes(c.env, symbols);
+    const symbols = rows.map((row) => row.symbol);
+    const currencies = rows.map((row) => normalizeCurrency(row.currency));
 
-    const results = rows.map((r, i) => {
-      const livePrice = prices[r.symbol];
-      let marketValue = r.market_value;
-      let unrealizedPnl = r.unrealized_pnl;
-      if (livePrice && r.quantity) {
-        marketValue = r.quantity * livePrice;
-        unrealizedPnl = marketValue - r.quantity * r.avg_cost;
+    const [prices, fxRates] = await Promise.all([
+      fetchQuotes(c.env, symbols),
+      fetchFxToUsd(c.env, currencies),
+    ]);
+
+    const results = rows.map((row, index) => {
+      const currency = normalizeCurrency(row.currency);
+      const costValue = row.quantity * row.avg_cost;
+      const livePrice = prices[row.symbol];
+      const fxRate = fxRates[currency];
+
+      const hasLivePrice = livePrice !== undefined;
+      const hasFxRate = fxRate !== undefined;
+
+      let marketValue: number | null = null;
+      let unrealizedPnl: number | null = null;
+      if (hasLivePrice) {
+        marketValue = row.quantity * livePrice;
+        unrealizedPnl = marketValue - costValue;
       }
+
+      const marketValueUsd = hasLivePrice && hasFxRate && marketValue !== null ? marketValue * fxRate : null;
+      const costValueUsd = hasFxRate ? costValue * fxRate : null;
+      const unrealizedPnlUsd =
+        hasLivePrice && hasFxRate && unrealizedPnl !== null ? unrealizedPnl * fxRate : null;
+
       return {
-        id: i + 1,
+        id: index + 1,
         broker_source: "IBKR_FLEX",
-        symbol: r.symbol,
-        quantity: r.quantity,
-        avg_cost: r.avg_cost,
-        last_price: livePrice || (r.quantity ? r.market_value / r.quantity : 0),
+        symbol: row.symbol,
+        quantity: row.quantity,
+        avg_cost: row.avg_cost,
+        cost_value: costValue,
+        last_price: hasLivePrice ? livePrice : null,
         market_value: marketValue,
         unrealized_pnl: unrealizedPnl,
-        currency: r.currency,
-        report_date: r.report_date,
+        market_value_usd: marketValueUsd,
+        cost_value_usd: costValueUsd,
+        unrealized_pnl_usd: unrealizedPnlUsd,
+        has_live_price: hasLivePrice,
+        live_price_missing_reason: hasLivePrice ? null : "TWELVEDATA_QUOTE_MISSING",
+        has_fx_rate: hasFxRate,
+        fx_rate_to_usd: hasFxRate ? fxRate : null,
+        fx_rate_missing_reason: hasFxRate ? null : "FX_RATE_MISSING",
+        currency,
+        report_date: row.report_date,
       };
     });
+
     return c.json(results);
-  } catch (e: any) {
-    return c.json({ error: e.message }, 502);
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 502);
   }
 });
 
@@ -74,8 +130,8 @@ app.post("/api/sync/ibkr-flex", async (c) => {
   try {
     const imported = await syncIbkrFlex(c.env);
     return c.json({ success: true, imported, message: "IBKR Flex sync completed" });
-  } catch (e: any) {
-    return c.json({ success: false, imported: 0, message: e.message }, 502);
+  } catch (error: unknown) {
+    return c.json({ success: false, imported: 0, message: getErrorMessage(error) }, 502);
   }
 });
 
@@ -83,41 +139,66 @@ app.post("/api/sync/ibkr-flex", async (c) => {
 app.get("/api/positions/longbridge", async (c) => {
   try {
     const rows = await fetchLongbridge(c.env);
-    const symbols = rows.map((r) => r.symbol);
-    const prices = await fetchQuotes(c.env, symbols);
+    const symbols = rows.map((row) => row.symbol);
+    const currencies = rows.map((row) => normalizeCurrency(row.currency));
 
-    const results = rows.map((r, i) => {
-      const livePrice = prices[r.symbol];
-      let lastPrice = r.last_price;
-      let currentValue = r.current_value;
-      let unrealizedPnl = r.unrealized_pnl;
-      let unrealizedPnlPct = r.unrealized_pnl_pct;
-      if (livePrice) {
-        lastPrice = livePrice;
-        currentValue = r.quantity * livePrice;
-        const costValue = r.quantity * r.avg_cost;
+    const [prices, fxRates] = await Promise.all([
+      fetchQuotes(c.env, symbols),
+      fetchFxToUsd(c.env, currencies),
+    ]);
+
+    const results = rows.map((row, index) => {
+      const currency = normalizeCurrency(row.currency);
+      const costValue = row.quantity * row.avg_cost;
+      const livePrice = prices[row.symbol];
+      const fxRate = fxRates[currency];
+
+      const hasLivePrice = livePrice !== undefined;
+      const hasFxRate = fxRate !== undefined;
+
+      let currentValue: number | null = null;
+      let unrealizedPnl: number | null = null;
+      let unrealizedPnlPct: number | null = null;
+      if (hasLivePrice) {
+        currentValue = row.quantity * livePrice;
         unrealizedPnl = currentValue - costValue;
-        unrealizedPnlPct = r.avg_cost ? (livePrice - r.avg_cost) / r.avg_cost : 0;
+        unrealizedPnlPct = row.avg_cost ? (livePrice - row.avg_cost) / row.avg_cost : 0;
       }
+
+      const marketValueUsd = hasLivePrice && hasFxRate && currentValue !== null ? currentValue * fxRate : null;
+      const costValueUsd = hasFxRate ? costValue * fxRate : null;
+      const unrealizedPnlUsd =
+        hasLivePrice && hasFxRate && unrealizedPnl !== null ? unrealizedPnl * fxRate : null;
+
       return {
-        id: i + 1,
+        id: index + 1,
         broker_source: "LONGBRIDGE_OPENAPI",
-        symbol: r.symbol,
-        market: r.market,
-        quantity: r.quantity,
-        avg_cost: r.avg_cost,
-        last_price: lastPrice,
+        symbol: row.symbol,
+        market: row.market,
+        quantity: row.quantity,
+        avg_cost: row.avg_cost,
+        cost_value: costValue,
+        last_price: hasLivePrice ? livePrice : null,
         current_value: currentValue,
-        cost_value: r.cost_value,
+        market_value: currentValue,
         unrealized_pnl: unrealizedPnl,
         unrealized_pnl_pct: unrealizedPnlPct,
-        currency: r.currency,
-        snapshot_time: r.snapshot_time,
+        market_value_usd: marketValueUsd,
+        cost_value_usd: costValueUsd,
+        unrealized_pnl_usd: unrealizedPnlUsd,
+        has_live_price: hasLivePrice,
+        live_price_missing_reason: hasLivePrice ? null : "TWELVEDATA_QUOTE_MISSING",
+        has_fx_rate: hasFxRate,
+        fx_rate_to_usd: hasFxRate ? fxRate : null,
+        fx_rate_missing_reason: hasFxRate ? null : "FX_RATE_MISSING",
+        currency,
+        snapshot_time: row.snapshot_time,
       };
     });
+
     return c.json(results);
-  } catch (e: any) {
-    return c.json({ error: e.message }, 502);
+  } catch (error: unknown) {
+    return c.json({ error: getErrorMessage(error) }, 502);
   }
 });
 
@@ -126,80 +207,126 @@ app.post("/api/sync/longbridge", async (c) => {
   try {
     const imported = await syncLongbridge(c.env);
     return c.json({ success: true, imported, message: "Longbridge sync completed" });
-  } catch (e: any) {
-    return c.json({ success: false, imported: 0, message: e.message }, 502);
+  } catch (error: unknown) {
+    return c.json({ success: false, imported: 0, message: getErrorMessage(error) }, 502);
   }
 });
 
 // --- Portfolio Summary (real-time: both APIs + Twelve Data prices) ---
 app.get("/api/portfolio/summary", async (c) => {
-  const brokers: Array<{ broker_source: string; total_market_value: number; total_unrealized_pnl: number }> = [];
-
-  // Collect all symbols for a single Twelve Data batch
   let ibkrRows: IbkrReportRow[] = [];
   let lbRows: LongbridgePositionRow[] = [];
-  const allSymbols: string[] = [];
+
+  const missingLivePriceSymbols = new Set<string>();
+  const missingFxCurrencies = new Set<string>();
 
   try {
     ibkrRows = await fetchIbkrFlex(c.env);
-    allSymbols.push(...ibkrRows.map((r) => r.symbol));
-  } catch (e) {
-    console.error("Summary: IBKR fetch failed", e);
+  } catch (error) {
+    console.error("Summary: IBKR fetch failed", error);
   }
 
   try {
     lbRows = await fetchLongbridge(c.env);
-    allSymbols.push(...lbRows.map((r) => r.symbol));
-  } catch (e) {
-    console.error("Summary: Longbridge fetch failed", e);
+  } catch (error) {
+    console.error("Summary: Longbridge fetch failed", error);
   }
 
-  // Single batch quote fetch for all symbols
-  const prices = await fetchQuotes(c.env, allSymbols);
+  const holdings: HoldingInput[] = [
+    ...ibkrRows.map((row) => ({
+      broker_source: "IBKR_FLEX" as const,
+      symbol: row.symbol,
+      quantity: row.quantity,
+      avg_cost: row.avg_cost,
+      currency: normalizeCurrency(row.currency),
+    })),
+    ...lbRows.map((row) => ({
+      broker_source: "LONGBRIDGE_OPENAPI" as const,
+      symbol: row.symbol,
+      quantity: row.quantity,
+      avg_cost: row.avg_cost,
+      currency: normalizeCurrency(row.currency),
+    })),
+  ];
 
-  // IBKR aggregation with live prices
-  if (ibkrRows.length > 0) {
-    let totalMv = 0;
-    let totalPnl = 0;
-    for (const r of ibkrRows) {
-      const livePrice = prices[r.symbol];
-      if (livePrice && r.quantity) {
-        const mv = r.quantity * livePrice;
-        totalMv += mv;
-        totalPnl += mv - r.quantity * r.avg_cost;
-      } else {
-        totalMv += r.market_value;
-        totalPnl += r.unrealized_pnl;
-      }
+  const [prices, fxRates] = await Promise.all([
+    fetchQuotes(c.env, holdings.map((holding) => holding.symbol)),
+    fetchFxToUsd(c.env, holdings.map((holding) => holding.currency)),
+  ]);
+
+  const brokerTotals = new Map<BrokerSource, BrokerAggregate>();
+  for (const source of ["IBKR_FLEX", "LONGBRIDGE_OPENAPI"] as const) {
+    if (holdings.some((holding) => holding.broker_source === source)) {
+      brokerTotals.set(source, {
+        broker_source: source,
+        total_market_value_usd: 0,
+        total_unrealized_pnl_usd: 0,
+        total_positions: 0,
+        priced_positions: 0,
+      });
     }
-    brokers.push({ broker_source: "IBKR_FLEX", total_market_value: totalMv, total_unrealized_pnl: totalPnl });
   }
 
-  // Longbridge aggregation with live prices
-  if (lbRows.length > 0) {
-    let totalMv = 0;
-    let totalPnl = 0;
-    for (const r of lbRows) {
-      const livePrice = prices[r.symbol];
-      if (livePrice) {
-        const mv = r.quantity * livePrice;
-        totalMv += mv;
-        totalPnl += mv - r.quantity * r.avg_cost;
-      } else {
-        totalMv += r.current_value;
-        totalPnl += r.unrealized_pnl;
-      }
+  let totalPositions = 0;
+  let pricedPositions = 0;
+
+  for (const holding of holdings) {
+    totalPositions += 1;
+    const aggregate = brokerTotals.get(holding.broker_source);
+    if (!aggregate) continue;
+
+    aggregate.total_positions += 1;
+
+    const livePrice = prices[holding.symbol];
+    if (livePrice === undefined) {
+      missingLivePriceSymbols.add(holding.symbol);
+      continue;
     }
-    brokers.push({ broker_source: "LONGBRIDGE_OPENAPI", total_market_value: totalMv, total_unrealized_pnl: totalPnl });
+
+    const fxRate = fxRates[holding.currency];
+    if (fxRate === undefined) {
+      missingFxCurrencies.add(holding.currency);
+      continue;
+    }
+
+    const marketValue = holding.quantity * livePrice;
+    const costValue = holding.quantity * holding.avg_cost;
+    const unrealizedPnl = marketValue - costValue;
+
+    aggregate.total_market_value_usd += marketValue * fxRate;
+    aggregate.total_unrealized_pnl_usd += unrealizedPnl * fxRate;
+    aggregate.priced_positions += 1;
+
+    pricedPositions += 1;
   }
 
-  const totalMarketValue = brokers.reduce((sum, b) => sum + b.total_market_value, 0);
-  const totalUnrealizedPnl = brokers.reduce((sum, b) => sum + b.total_unrealized_pnl, 0);
+  const brokers = Array.from(brokerTotals.values()).map((broker) => ({
+    broker_source: broker.broker_source,
+    total_market_value_usd: broker.total_market_value_usd,
+    total_unrealized_pnl_usd: broker.total_unrealized_pnl_usd,
+    // Backward-compatible aliases
+    total_market_value: broker.total_market_value_usd,
+    total_unrealized_pnl: broker.total_unrealized_pnl_usd,
+    total_positions: broker.total_positions,
+    priced_positions: broker.priced_positions,
+  }));
+
+  const totalMarketValueUsd = brokers.reduce((sum, broker) => sum + broker.total_market_value_usd, 0);
+  const totalUnrealizedPnlUsd = brokers.reduce((sum, broker) => sum + broker.total_unrealized_pnl_usd, 0);
 
   return c.json({
     brokers,
-    total_market_value: totalMarketValue,
-    total_unrealized_pnl: totalUnrealizedPnl,
+    total_market_value_usd: totalMarketValueUsd,
+    total_unrealized_pnl_usd: totalUnrealizedPnlUsd,
+    // Backward-compatible aliases
+    total_market_value: totalMarketValueUsd,
+    total_unrealized_pnl: totalUnrealizedPnlUsd,
+    data_quality: {
+      total_positions: totalPositions,
+      priced_positions: pricedPositions,
+      missing_live_price_symbols: Array.from(missingLivePriceSymbols).sort(),
+      missing_fx_currencies: Array.from(missingFxCurrencies).sort(),
+    },
   });
 });
 

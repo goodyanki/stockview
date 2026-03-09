@@ -47,8 +47,18 @@ export interface IbkrReport {
   symbol: string;
   quantity: number;
   avg_cost: number;
-  market_value: number;
-  unrealized_pnl: number;
+  cost_value: number;
+  last_price: number | null;
+  market_value: number | null;
+  unrealized_pnl: number | null;
+  market_value_usd: number | null;
+  cost_value_usd: number | null;
+  unrealized_pnl_usd: number | null;
+  has_live_price: boolean;
+  live_price_missing_reason: string | null;
+  has_fx_rate: boolean;
+  fx_rate_to_usd: number | null;
+  fx_rate_missing_reason: string | null;
   currency: string;
   report_date: string;
 }
@@ -60,25 +70,48 @@ export interface LongbridgePosition {
   market: string;
   quantity: number;
   avg_cost: number;
-  last_price: number;
-  current_value: number;
   cost_value: number;
-  unrealized_pnl: number;
-  unrealized_pnl_pct: number;
+  last_price: number | null;
+  current_value: number | null;
+  market_value: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pnl_pct: number | null;
+  market_value_usd: number | null;
+  cost_value_usd: number | null;
+  unrealized_pnl_usd: number | null;
+  has_live_price: boolean;
+  live_price_missing_reason: string | null;
+  has_fx_rate: boolean;
+  fx_rate_to_usd: number | null;
+  fx_rate_missing_reason: string | null;
   currency: string;
   snapshot_time: string;
 }
 
 export interface BrokerSummary {
   broker_source: string;
+  total_market_value_usd: number;
+  total_unrealized_pnl_usd: number;
   total_market_value: number;
   total_unrealized_pnl: number;
+  total_positions: number;
+  priced_positions: number;
+}
+
+export interface DataQualitySummary {
+  total_positions: number;
+  priced_positions: number;
+  missing_live_price_symbols: string[];
+  missing_fx_currencies: string[];
 }
 
 export interface PortfolioSummary {
   brokers: BrokerSummary[];
+  total_market_value_usd: number;
+  total_unrealized_pnl_usd: number;
   total_market_value: number;
   total_unrealized_pnl: number;
+  data_quality: DataQualitySummary;
 }
 
 export interface DailySnapshot {

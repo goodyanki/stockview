@@ -48,13 +48,21 @@ function setStatus(text, isError = false) {
   statusBar.style.color = isError ? "#c83d3d" : "#52606d";
 }
 
+function toNumberOrNull(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
 function formatNumber(value) {
-  const num = Number(value || 0);
+  const num = toNumberOrNull(value);
+  if (num === null) return "--";
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(num);
 }
 
 function formatPct(value) {
-  return `${(Number(value || 0) * 100).toFixed(2)}%`;
+  const num = toNumberOrNull(value);
+  if (num === null) return "--";
+  return `${(num * 100).toFixed(2)}%`;
 }
 
 function formatTime(value) {
@@ -65,7 +73,31 @@ function formatTime(value) {
 }
 
 function pnlClass(value) {
-  return Number(value) >= 0 ? "pnl-pos" : "pnl-neg";
+  const num = toNumberOrNull(value);
+  if (num === null) return "";
+  return num >= 0 ? "pnl-pos" : "pnl-neg";
+}
+
+function renderPriceCell(value, missingReason) {
+  if (value === null || value === undefined) {
+    const reason = missingReason || "ÏÖ¼ÛÈ±Ê§";
+    return `<span class="missing-value" title="${reason}">--</span>`;
+  }
+  return formatNumber(value);
+}
+
+function renderQualityStatus(baseText, quality) {
+  if (!quality) {
+    setStatus(baseText);
+    return;
+  }
+  const missingQuoteCount = Array.isArray(quality.missing_live_price_symbols)
+    ? quality.missing_live_price_symbols.length
+    : 0;
+  const missingFxCount = Array.isArray(quality.missing_fx_currencies)
+    ? quality.missing_fx_currencies.length
+    : 0;
+  setStatus(`${baseText} | È±Ê§ÏÖ¼Û: ${missingQuoteCount} | È±Ê§»ãÂÊ: ${missingFxCount}`);
 }
 
 async function apiFetch(path, options = {}) {
@@ -99,7 +131,6 @@ function showApp() {
 async function attemptLogin(username, password) {
   localStorage.setItem(VIEW_USERNAME_KEY, username);
   localStorage.setItem(VIEW_PASSWORD_KEY, password);
-  /* Verify credentials with lightweight auth check */
   await apiFetch("/api/auth/check");
 }
 
@@ -107,29 +138,31 @@ loginBtn.addEventListener("click", async () => {
   const username = loginUsernameInput.value.trim();
   const password = loginPasswordInput.value;
   if (!username || !password) {
-    loginError.textContent = "è¯·è¾“å…¥ç”¨æˆ·åå’Œå¯†ç ";
+    loginError.textContent = "ÇëÊäÈëÓÃ»§ÃûºÍÃÜÂë";
     return;
   }
+
   loginError.textContent = "";
   loginBtn.disabled = true;
-  loginBtn.textContent = "ç™»å½•ä¸­...";
+  loginBtn.textContent = "µÇÂ¼ÖĞ...";
+
   try {
     await attemptLogin(username, password);
     showApp();
-    setStatus("æ­£åœ¨åŠ è½½æ•°æ®...");
-    await refreshAll();
-    setStatus("æ•°æ®åŠ è½½å®Œæˆ");
-  } catch (error) {
-    loginError.textContent = "ç™»å½•å¤±è´¥ï¼šç”¨æˆ·åæˆ–å¯†ç é”™è¯¯";
+    setStatus("ÕıÔÚ¼ÓÔØÊı¾İ...");
+    const quality = await refreshAll();
+    renderQualityStatus("Êı¾İ¼ÓÔØÍê³É", quality);
+  } catch {
+    loginError.textContent = "µÇÂ¼Ê§°Ü£ºÓÃ»§Ãû»òÃÜÂë´íÎó";
     localStorage.removeItem(VIEW_PASSWORD_KEY);
   } finally {
     loginBtn.disabled = false;
-    loginBtn.textContent = "ç™»å½•";
+    loginBtn.textContent = "µÇÂ¼";
   }
 });
 
-loginPasswordInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") loginBtn.click();
+loginPasswordInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") loginBtn.click();
 });
 
 logoutBtn.addEventListener("click", () => {
@@ -156,55 +189,60 @@ function buildYearLabels(snapshots) {
   const start = new Date(snapshots[0].date);
   const end = new Date(start);
   end.setFullYear(end.getFullYear() + 1);
+
   const labels = [];
-  const d = new Date(start);
-  while (d <= end) {
-    labels.push(d.toISOString().slice(0, 10));
-    d.setDate(d.getDate() + 1);
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    labels.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() + 1);
   }
   return labels;
 }
 
 function calcYRange(values) {
-  const real = values.filter((v) => v !== null);
-  if (!real.length) return { min: 0, max: 100 };
-  const latest = real[real.length - 1];
-  const dataMin = Math.min(...real);
-  const dataMax = Math.max(...real);
-  // latest sits at 60% of the visible range
+  const realValues = values.filter((value) => value !== null);
+  if (!realValues.length) return { min: 0, max: 100 };
+
+  const latest = realValues[realValues.length - 1];
+  const dataMin = Math.min(...realValues);
+  const dataMax = Math.max(...realValues);
+
   const rangeBelow = latest - dataMin;
   const rangeAbove = (rangeBelow / 0.6) * 0.4;
   const yMax = Math.max(dataMax, latest + rangeAbove);
   const yMin = dataMin;
-  // add a small padding
-  const pad = (yMax - yMin) * 0.05 || 100;
-  return { min: Math.floor(yMin - pad), max: Math.ceil(yMax + pad) };
+  const padding = (yMax - yMin) * 0.05 || 100;
+
+  return { min: Math.floor(yMin - padding), max: Math.ceil(yMax + padding) };
 }
 
 async function loadSnapshotChart() {
   const data = await apiFetch("/api/portfolio/snapshots");
   const yearLabels = buildYearLabels(data);
+
   const valueMap = {};
-  data.forEach((d) => { valueMap[d.date] = d.total_value_usd; });
+  data.forEach((row) => {
+    valueMap[row.date] = row.total_value_usd;
+  });
 
   const values = yearLabels.map((date) => valueMap[date] ?? null);
   const yRange = calcYRange(values);
 
-  // update YTD P&L card
   if (data.length >= 2) {
     const initial = data[0].total_value_usd;
     const latest = data[data.length - 1].total_value_usd;
     const pnl = latest - initial;
-    const pnlPct = ((pnl / initial) * 100).toFixed(2);
+    const pnlPct = initial ? ((pnl / initial) * 100).toFixed(2) : "0.00";
+
     const ytdEl = document.getElementById("ytdPnl");
     if (ytdEl) {
       ytdEl.className = `value ${pnl >= 0 ? "pnl-pos" : "pnl-neg"}`;
-      ytdEl.textContent = `${pnl >= 0 ? "+" : ""}${formatNumber(pnl)}  (${pnl >= 0 ? "+" : ""}${pnlPct}%)`;
+      ytdEl.textContent = `${pnl >= 0 ? "+" : ""}${formatNumber(pnl)} (${pnl >= 0 ? "+" : ""}${pnlPct}%)`;
     }
   }
 
   const canvas = document.getElementById("snapshotChart");
-  const ctx = canvas.getContext("2d");
+  const context = canvas.getContext("2d");
 
   if (snapshotChart) {
     snapshotChart.data.labels = yearLabels;
@@ -215,13 +253,13 @@ async function loadSnapshotChart() {
     return;
   }
 
-  snapshotChart = new Chart(ctx, {
+  snapshotChart = new Chart(context, {
     type: "line",
     data: {
       labels: yearLabels,
       datasets: [
         {
-          label: "è´¦æˆ·æ€»é¢ (USD)",
+          label: "ÕË»§×Ü¶î (USD)",
           data: values,
           borderColor: "#0059b8",
           backgroundColor: "rgba(0, 89, 184, 0.08)",
@@ -237,11 +275,11 @@ async function loadSnapshotChart() {
       plugins: { legend: { display: false } },
       scales: {
         x: {
-          title: { display: true, text: "æ—¥æœŸ" },
+          title: { display: true, text: "ÈÕÆÚ" },
           ticks: {
             maxTicksLimit: 12,
-            callback: function (val, idx) {
-              const label = this.getLabelForValue(idx);
+            callback: function (_, index) {
+              const label = this.getLabelForValue(index);
               return label ? label.slice(5) : "";
             },
           },
@@ -259,100 +297,115 @@ async function loadSnapshotChart() {
 /* ===== Data loading ===== */
 async function loadSummary() {
   const data = await apiFetch("/api/portfolio/summary");
-  const brokerNames = { IBKR_FLEX: "ç›ˆé€è¯åˆ¸", LONGBRIDGE_OPENAPI: "é•¿æ¡¥" };
+  const brokerNames = {
+    IBKR_FLEX: "Ó¯Í¸Ö¤È¯",
+    LONGBRIDGE_OPENAPI: "³¤ÇÅ",
+  };
+
+  const totalMarketValueUsd = data.total_market_value_usd ?? data.total_market_value ?? 0;
+  const totalUnrealizedPnlUsd = data.total_unrealized_pnl_usd ?? data.total_unrealized_pnl ?? 0;
 
   summaryCards.innerHTML = `
     <article class="card">
-      <div class="label">æ€»å¸‚å€¼</div>
-      <div class="value">${formatNumber(data.total_market_value)}</div>
+      <div class="label">×ÜÊĞÖµ (USD)</div>
+      <div class="value">${formatNumber(totalMarketValueUsd)}</div>
     </article>
     <article class="card">
-      <div class="label">æœªå®ç°ç›ˆäº</div>
-      <div class="value ${pnlClass(data.total_unrealized_pnl)}">${formatNumber(data.total_unrealized_pnl)}</div>
+      <div class="label">Î´ÊµÏÖÓ¯¿÷ (USD)</div>
+      <div class="value ${pnlClass(totalUnrealizedPnlUsd)}">${formatNumber(totalUnrealizedPnlUsd)}</div>
     </article>
     <article class="card">
-      <div class="label">åˆ¸å•†æ•°é‡</div>
+      <div class="label">È¯ÉÌÊıÁ¿</div>
       <div class="value">${data.brokers.length}</div>
     </article>
   `;
 
   summaryTableBody.innerHTML = data.brokers
-    .map(
-      (item) => `
+    .map((item) => {
+      const brokerMvUsd = item.total_market_value_usd ?? item.total_market_value ?? 0;
+      const brokerPnlUsd = item.total_unrealized_pnl_usd ?? item.total_unrealized_pnl ?? 0;
+
+      return `
       <tr>
         <td>${brokerNames[item.broker_source] || item.broker_source}</td>
-        <td>${formatNumber(item.total_market_value)}</td>
-        <td class="${pnlClass(item.total_unrealized_pnl)}">${formatNumber(item.total_unrealized_pnl)}</td>
+        <td>${formatNumber(brokerMvUsd)}</td>
+        <td class="${pnlClass(brokerPnlUsd)}">${formatNumber(brokerPnlUsd)}</td>
       </tr>
-    `
-    )
+    `;
+    })
     .join("");
+
+  return data.data_quality || null;
 }
 
 async function loadIbkrReports() {
   const rows = await apiFetch("/api/reports/ibkr?limit=200");
+
   ibkrTableBody.innerHTML = rows
-    .map(
-      (item) => `
+    .map((item) => `
       <tr>
         <td>${item.symbol}</td>
         <td>${formatNumber(item.quantity)}</td>
         <td>${formatNumber(item.avg_cost)}</td>
-        <td>${formatNumber(item.last_price)}</td>
+        <td>${renderPriceCell(item.last_price, item.live_price_missing_reason)}</td>
         <td>${formatNumber(item.market_value)}</td>
         <td class="${pnlClass(item.unrealized_pnl)}">${formatNumber(item.unrealized_pnl)}</td>
         <td>${item.currency}</td>
         <td>${formatTime(item.report_date)}</td>
       </tr>
-    `
-    )
+    `)
     .join("");
 }
 
 async function loadLongbridgePositions() {
   const rows = await apiFetch("/api/positions/longbridge?limit=200");
+
   longbridgeTableBody.innerHTML = rows
-    .map(
-      (item) => `
+    .map((item) => `
       <tr>
         <td>${item.symbol}</td>
         <td>${item.market}</td>
         <td>${formatNumber(item.quantity)}</td>
         <td>${formatNumber(item.avg_cost)}</td>
-        <td>${formatNumber(item.last_price)}</td>
+        <td>${renderPriceCell(item.last_price, item.live_price_missing_reason)}</td>
         <td>${formatNumber(item.current_value)}</td>
         <td class="${pnlClass(item.unrealized_pnl)}">${formatNumber(item.unrealized_pnl)}</td>
         <td class="${pnlClass(item.unrealized_pnl_pct)}">${formatPct(item.unrealized_pnl_pct)}</td>
         <td>${item.currency}</td>
         <td>${formatTime(item.snapshot_time)}</td>
       </tr>
-    `
-    )
+    `)
     .join("");
 }
 
 async function refreshAll() {
-  await Promise.all([loadSummary(), loadIbkrReports(), loadLongbridgePositions(), loadSnapshotChart()]);
+  const [quality] = await Promise.all([
+    loadSummary(),
+    loadIbkrReports(),
+    loadLongbridgePositions(),
+    loadSnapshotChart(),
+  ]);
+  return quality;
 }
 
 /* ===== Refresh buttons ===== */
 syncIbkrBtn.addEventListener("click", async () => {
-  setStatus("æ­£åœ¨è·å–ç›ˆé€è¡Œæƒ…...");
+  setStatus("ÕıÔÚË¢ĞÂÓ¯Í¸ĞĞÇé...");
   try {
-    await Promise.all([loadIbkrReports(), loadSummary()]);
-    setStatus("ç›ˆé€è¡Œæƒ…å·²æ›´æ–°");
+    const [quality] = await Promise.all([loadSummary(), loadIbkrReports()]);
+    renderQualityStatus("Ó¯Í¸ĞĞÇéÒÑË¢ĞÂ", quality);
   } catch (error) {
-    setStatus(`ç›ˆé€è¡Œæƒ…è·å–å¤±è´¥ï¼š${error.message}`, true);
+    setStatus(`Ó¯Í¸ĞĞÇéË¢ĞÂÊ§°Ü: ${error.message}`, true);
   }
 });
 
 syncLongbridgeBtn.addEventListener("click", async () => {
-  setStatus("æ­£åœ¨è·å–é•¿æ¡¥è¡Œæƒ…...");
+  setStatus("ÕıÔÚË¢ĞÂ³¤ÇÅĞĞÇé...");
   try {
-    await Promise.all([loadLongbridgePositions(), loadSummary()]);
-    setStatus("é•¿æ¡¥è¡Œæƒ…å·²æ›´æ–°");
+    const [quality] = await Promise.all([loadSummary(), loadLongbridgePositions()]);
+    renderQualityStatus("³¤ÇÅĞĞÇéÒÑË¢ĞÂ", quality);
   } catch (error) {
-    setStatus(`é•¿æ¡¥è¡Œæƒ…è·å–å¤±è´¥ï¼š${error.message}`, true);
+    setStatus(`³¤ÇÅĞĞÇéË¢ĞÂÊ§°Ü: ${error.message}`, true);
   }
 });
 
@@ -362,19 +415,18 @@ async function boot() {
   const savedPass = getViewPassword();
 
   if (savedUser && savedPass) {
-    /* Try auto-login with saved credentials */
     try {
       await apiFetch("/api/auth/check");
       showApp();
-      setStatus("æ­£åœ¨åŠ è½½æ•°æ®...");
-      await refreshAll();
-      setStatus("æ•°æ®åŠ è½½å®Œæˆ");
+      setStatus("ÕıÔÚ¼ÓÔØÊı¾İ...");
+      const quality = await refreshAll();
+      renderQualityStatus("Êı¾İ¼ÓÔØÍê³É", quality);
       return;
     } catch {
-      /* Saved credentials are stale, fall through to login */
       localStorage.removeItem(VIEW_PASSWORD_KEY);
     }
   }
+
   showLogin();
 }
 
