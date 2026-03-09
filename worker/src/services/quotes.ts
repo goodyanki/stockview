@@ -1,55 +1,55 @@
 import { Env } from "../types";
 
-const TWELVE_DATA_BASE = "https://api.twelvedata.com";
+const YAHOO_QUOTE_ENDPOINT = "https://query1.finance.yahoo.com/v7/finance/quote";
 
 /**
- * Fetch real-time prices from Twelve Data API.
+ * Fetch delayed market prices from Yahoo Finance.
  * Accepts symbols in any format (IBKR or Longbridge) and normalizes them.
  * Returns a map: original_symbol -> price
  */
 export async function fetchQuotes(env: Env, symbols: string[]): Promise<Record<string, number>> {
-  if (!env.TWELVE_API_KEY || symbols.length === 0) return {};
+  if (symbols.length === 0) return {};
 
-  const tdToOriginal: Record<string, string[]> = {};
+  const yahooToOriginal: Record<string, string[]> = {};
   for (const symbol of symbols) {
-    const normalized = toTwelveDataSymbol(symbol);
+    const normalized = toYahooSymbol(symbol);
     if (!normalized) continue;
-    if (!tdToOriginal[normalized]) tdToOriginal[normalized] = [];
-    tdToOriginal[normalized].push(symbol);
+    if (!yahooToOriginal[normalized]) yahooToOriginal[normalized] = [];
+    yahooToOriginal[normalized].push(symbol);
   }
 
-  const tdSymbols = Object.keys(tdToOriginal);
-  const tdQuotes = await fetchTwelveQuotes(env, tdSymbols);
+  const yahooSymbols = Object.keys(yahooToOriginal);
+  const yahooQuotes = await fetchYahooQuotes(env, yahooSymbols);
 
   const mapped: Record<string, number> = {};
-  for (const [tdSymbol, originals] of Object.entries(tdToOriginal)) {
-    const price = tdQuotes[tdSymbol];
+  for (const [yahooSymbol, originals] of Object.entries(yahooToOriginal)) {
+    const price = yahooQuotes[yahooSymbol];
     if (price === undefined) continue;
     for (const original of originals) mapped[original] = price;
   }
   return mapped;
 }
 
-/** Fetch FX rates to USD. Example: HKD -> HKD/USD */
+/** Fetch FX rates to USD from Yahoo Finance. Example: HKD -> HKDUSD=X */
 export async function fetchFxToUsd(env: Env, currencies: string[]): Promise<Record<string, number>> {
   const rates: Record<string, number> = { USD: 1 };
-  if (!env.TWELVE_API_KEY || currencies.length === 0) return rates;
+  if (currencies.length === 0) return rates;
 
   const normalized = Array.from(
     new Set(currencies.map((currency) => currency.trim().toUpperCase()).filter(Boolean))
   );
 
-  const tdToCurrency: Record<string, string> = {};
+  const yahooToCurrency: Record<string, string> = {};
   for (const currency of normalized) {
     if (currency === "USD") continue;
-    tdToCurrency[`${currency}/USD`] = currency;
+    yahooToCurrency[`${currency}USD=X`] = currency;
   }
 
-  const tdSymbols = Object.keys(tdToCurrency);
-  const tdQuotes = await fetchTwelveQuotes(env, tdSymbols);
+  const yahooSymbols = Object.keys(yahooToCurrency);
+  const yahooQuotes = await fetchYahooQuotes(env, yahooSymbols);
 
-  for (const [tdSymbol, currency] of Object.entries(tdToCurrency)) {
-    const rate = tdQuotes[tdSymbol];
+  for (const [yahooSymbol, currency] of Object.entries(yahooToCurrency)) {
+    const rate = yahooQuotes[yahooSymbol];
     if (rate !== undefined) {
       rates[currency] = rate;
     }
@@ -59,87 +59,108 @@ export async function fetchFxToUsd(env: Env, currencies: string[]): Promise<Reco
 }
 
 /**
- * Convert broker-specific symbol to Twelve Data format.
+ * Convert broker-specific symbol to Yahoo Finance format.
  * - Longbridge "AVGO.US" -> "AVGO"
- * - Longbridge "00700.HK" -> "00700:HKEX" or keep as-is
- * - IBKR "AAPL" -> "AAPL"
+ * - Longbridge "00700.HK" -> "0700.HK"
+ * - IBKR "BRK.B" -> "BRK-B"
  * - IBKR options "AMZN  270115C00250000" -> null (skip)
  */
-function toTwelveDataSymbol(symbol: string): string | null {
-  // Skip options (contain spaces or long format)
-  if (/\s/.test(symbol.trim())) return null;
+function toYahooSymbol(symbol: string): string | null {
+  const trimmed = symbol.trim();
+  if (!trimmed || looksLikeOptionSymbol(trimmed)) return null;
 
-  // Longbridge format: SYMBOL.MARKET
-  if (symbol.includes(".")) {
-    const parts = symbol.split(".");
-    const ticker = parts[0];
+  // Longbridge format: SYMBOL.MARKET; keep only known suffixes.
+  if (trimmed.includes(".")) {
+    const parts = trimmed.split(".");
+    const ticker = parts.slice(0, -1).join(".");
     const market = parts[parts.length - 1].toUpperCase();
 
-    if (market === "US") return ticker;
-    if (market === "HK") return ticker + ".HK"; // Twelve Data uses XXXX.HK for HK stocks
-    return ticker;
+    if (market === "US") return normalizeUsTicker(ticker);
+    if (market === "HK") return normalizeHkTicker(ticker);
+    return normalizeUsTicker(ticker);
   }
 
-  // Plain symbol (IBKR stocks/ETFs)
-  return symbol;
+  return normalizeUsTicker(trimmed);
 }
 
-async function fetchTwelveQuotes(env: Env, symbols: string[]): Promise<Record<string, number>> {
-  if (!env.TWELVE_API_KEY || symbols.length === 0) return {};
+function looksLikeOptionSymbol(symbol: string): boolean {
+  // Typical IBKR option symbol format, e.g. "AMZN  270115C00250000"
+  if (/\s+\d{6}[CP]\d{8}$/.test(symbol.toUpperCase())) return true;
+  // Conservative fallback: spaces with many digits are very likely derivatives, not equities.
+  return /\s/.test(symbol) && /\d{4,}/.test(symbol);
+}
+
+function normalizeUsTicker(ticker: string): string | null {
+  const compact = ticker.trim().toUpperCase();
+  if (!compact) return null;
+
+  if (/\s/.test(compact)) {
+    const collapsed = compact.replace(/\s+/g, " ");
+    // Support class shares in spaced form, e.g. "BRK B" -> "BRK-B"
+    if (/^[A-Z0-9]+\s[A-Z0-9]+$/.test(collapsed)) {
+      return collapsed.replace(" ", "-");
+    }
+    return null;
+  }
+
+  return compact.replace(/\./g, "-");
+}
+
+function normalizeHkTicker(ticker: string): string | null {
+  const compact = ticker.trim().toUpperCase();
+  if (!compact) return null;
+
+  if (/^\d+$/.test(compact)) {
+    // Yahoo HK equity format expects 4 digits, e.g. 0700.HK, 9988.HK
+    const code = Number.parseInt(compact, 10).toString().padStart(4, "0");
+    return `${code}.HK`;
+  }
+
+  return `${compact}.HK`;
+}
+
+async function fetchYahooQuotes(_env: Env, symbols: string[]): Promise<Record<string, number>> {
+  if (symbols.length === 0) return {};
 
   const quotes: Record<string, number> = {};
+  const uniqueSymbols = Array.from(new Set(symbols.filter(Boolean)));
 
-  // Keep batch size conservative for API limits.
-  for (let i = 0; i < symbols.length; i += 8) {
-    const batch = symbols.slice(i, i + 8);
-    const url = `${TWELVE_DATA_BASE}/quote?symbol=${encodeURIComponent(batch.join(","))}&apikey=${env.TWELVE_API_KEY}`;
+  // Keep batch size conservative.
+  for (let i = 0; i < uniqueSymbols.length; i += 50) {
+    const batch = uniqueSymbols.slice(i, i + 50);
+    const url = `${YAHOO_QUOTE_ENDPOINT}?symbols=${encodeURIComponent(batch.join(","))}`;
 
     try {
       const response = await fetch(url);
       if (!response.ok) {
-        console.error(`Twelve Data quote request failed (${response.status}) for: ${batch.join(",")}`);
+        console.error(`Yahoo quote request failed (${response.status}) for: ${batch.join(",")}`);
         continue;
       }
 
-      const payload = (await response.json()) as Record<string, unknown>;
-      if (batch.length === 1) {
-        const symbol = batch[0];
-        const price = parseQuotePrice(payload);
-        if (price !== undefined) {
-          quotes[symbol] = price;
-        }
-        continue;
-      }
-
-      for (const symbol of batch) {
-        const quote = payload[symbol];
-        if (!quote || typeof quote !== "object") continue;
-        const price = parseQuotePrice(quote as Record<string, unknown>);
-        if (price !== undefined) {
-          quotes[symbol] = price;
-        }
+      const payload = (await response.json()) as any;
+      const results: any[] = payload?.quoteResponse?.result || [];
+      for (const item of results) {
+        const symbol = typeof item?.symbol === "string" ? item.symbol : "";
+        if (!symbol) continue;
+        const price = parseYahooPrice(item);
+        if (price !== undefined) quotes[symbol] = price;
       }
     } catch (error) {
-      console.error(`Twelve Data quote request failed for: ${batch.join(",")}`, error);
+      console.error(`Yahoo quote request failed for: ${batch.join(",")}`, error);
     }
   }
 
   return quotes;
 }
 
-function parseQuotePrice(payload: Record<string, unknown>): number | undefined {
-  const status = payload.status;
-  if (typeof status === "string" && status.toLowerCase() === "error") {
-    return undefined;
-  }
-
-  const close = toPositiveNumber(payload.close);
-  if (close !== undefined) return close;
-
-  const price = toPositiveNumber(payload.price);
-  if (price !== undefined) return price;
-
-  return toPositiveNumber(payload.previous_close);
+function parseYahooPrice(payload: Record<string, unknown>): number | undefined {
+  return (
+    toPositiveNumber(payload.regularMarketPrice) ??
+    toPositiveNumber(payload.postMarketPrice) ??
+    toPositiveNumber(payload.preMarketPrice) ??
+    toPositiveNumber(payload.regularMarketPreviousClose) ??
+    toPositiveNumber(payload.previousClose)
+  );
 }
 
 function toPositiveNumber(input: unknown): number | undefined {

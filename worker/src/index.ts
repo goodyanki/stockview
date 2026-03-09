@@ -63,7 +63,7 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-// --- IBKR Reports (real-time from IBKR Flex API + Twelve Data prices) ---
+// --- IBKR Reports (real-time from IBKR Flex + Yahoo delayed quotes) ---
 app.get("/api/reports/ibkr", async (c) => {
   try {
     const rows = await fetchIbkrFlex(c.env);
@@ -110,7 +110,7 @@ app.get("/api/reports/ibkr", async (c) => {
         cost_value_usd: costValueUsd,
         unrealized_pnl_usd: unrealizedPnlUsd,
         has_live_price: hasLivePrice,
-        live_price_missing_reason: hasLivePrice ? null : "TWELVEDATA_QUOTE_MISSING",
+        live_price_missing_reason: hasLivePrice ? null : "YFINANCE_QUOTE_MISSING",
         has_fx_rate: hasFxRate,
         fx_rate_to_usd: hasFxRate ? fxRate : null,
         fx_rate_missing_reason: hasFxRate ? null : "FX_RATE_MISSING",
@@ -135,7 +135,7 @@ app.post("/api/sync/ibkr-flex", async (c) => {
   }
 });
 
-// --- Longbridge Positions (real-time from Longbridge API + Twelve Data prices) ---
+// --- Longbridge Positions (real-time from Longbridge API + Yahoo delayed quotes) ---
 app.get("/api/positions/longbridge", async (c) => {
   try {
     const rows = await fetchLongbridge(c.env);
@@ -187,7 +187,7 @@ app.get("/api/positions/longbridge", async (c) => {
         cost_value_usd: costValueUsd,
         unrealized_pnl_usd: unrealizedPnlUsd,
         has_live_price: hasLivePrice,
-        live_price_missing_reason: hasLivePrice ? null : "TWELVEDATA_QUOTE_MISSING",
+        live_price_missing_reason: hasLivePrice ? null : "YFINANCE_QUOTE_MISSING",
         has_fx_rate: hasFxRate,
         fx_rate_to_usd: hasFxRate ? fxRate : null,
         fx_rate_missing_reason: hasFxRate ? null : "FX_RATE_MISSING",
@@ -212,7 +212,7 @@ app.post("/api/sync/longbridge", async (c) => {
   }
 });
 
-// --- Portfolio Summary (real-time: both APIs + Twelve Data prices) ---
+// --- Portfolio Summary (real-time: both APIs + Yahoo delayed quotes) ---
 app.get("/api/portfolio/summary", async (c) => {
   let ibkrRows: IbkrReportRow[] = [];
   let lbRows: LongbridgePositionRow[] = [];

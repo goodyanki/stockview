@@ -81,67 +81,153 @@ function extractReferenceCode(text: string): string {
 }
 
 function parseStatement(xmlPayload: string): IbkrReportRow[] {
-  let reportDate = new Date().toISOString();
-  const dateMatch = xmlPayload.match(/toDate="([^"]+)"/);
-  if (dateMatch) {
-    let raw = dateMatch[1];
-    if (/^\d{8}$/.test(raw)) {
-      raw = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
-    }
-    const parsed = new Date(raw + "T00:00:00Z");
-    if (!isNaN(parsed.getTime())) {
-      reportDate = parsed.toISOString();
-    }
+  const reportDate = extractReportDate(xmlPayload);
+
+  // Primary parser: only tags that clearly represent open positions.
+  const strictRows = parseStatementWithRegex(xmlPayload, reportDate, true);
+  if (strictRows.length > 0) return strictRows;
+
+  // Fallback parser: allow generic "position" tags for unusual Flex exports.
+  const fallbackRows = parseStatementWithRegex(xmlPayload, reportDate, false);
+  if (fallbackRows.length > 0) return fallbackRows;
+
+  return mockRows();
+}
+
+function extractReportDate(xmlPayload: string): string {
+  const nowIso = new Date().toISOString();
+  const patterns = [/toDate="([^"]+)"/i, /toDate='([^']+)'/i];
+
+  for (const pattern of patterns) {
+    const match = xmlPayload.match(pattern);
+    if (!match) continue;
+    const parsed = parseDateToIso(match[1]);
+    if (parsed) return parsed;
   }
 
+  return nowIso;
+}
+
+function parseStatementWithRegex(xmlPayload: string, reportDate: string, strictOpenPositionOnly: boolean): IbkrReportRow[] {
   const rows: IbkrReportRow[] = [];
-  const tagRegex = /<(\w+)\s([^>]*?)\/?>/g;
+  const tagRegex = /<([A-Za-z0-9_:.:-]+)\b([^>]*)\/?>/g;
   let match: RegExpExecArray | null;
 
   while ((match = tagRegex.exec(xmlPayload)) !== null) {
-    const attrString = match[2];
-    const attrs = parseAttributes(attrString);
+    const tag = match[1].toLowerCase();
+    const accepted = strictOpenPositionOnly ? isOpenPositionTag(tag) : isLikelyPositionTag(tag);
+    if (!accepted) continue;
 
-    const symbol = attrs.symbol || attrs.underlyingsymbol;
-    const quantityRaw = attrs.position || attrs.quantity || attrs.qty;
-    if (!symbol || !quantityRaw) continue;
-
-    const quantity = toFloat(quantityRaw);
-    const costBasisPrice = toFloat(attrs.costbasisprice || attrs.avgcost || attrs.avg_price);
-    let avgCost: number;
-    if (costBasisPrice) {
-      avgCost = costBasisPrice;
-    } else {
-      const totalCost = toFloat(attrs.costbasismoney || attrs.costbasis);
-      avgCost = quantity ? totalCost / quantity : 0;
-    }
-    const marketValue = toFloat(attrs.positionvalue || attrs.marketvalue || attrs.currentvalue);
-    const unrealizedPnl = toFloat(attrs.fifopnlunrealized || attrs.unrealizedpl || attrs.unrealized_pnl);
-    const currency = attrs.currency || "USD";
-
-    rows.push({
-      report_date: reportDate,
-      symbol,
-      quantity,
-      avg_cost: avgCost,
-      market_value: marketValue,
-      unrealized_pnl: unrealizedPnl,
-      currency,
-      parsed_payload: JSON.stringify(attrs),
-    });
+    const attrs = parseAttributes(match[2]);
+    const row = buildIbkrRow(attrs, reportDate);
+    if (row) rows.push(row);
   }
 
-  return rows.length > 0 ? rows : mockRows();
+  return mergeRowsBySymbolCurrency(rows);
+}
+
+function isLikelyPositionTag(tag: string): boolean {
+  return tag.includes("openposition") || tag.endsWith(":openposition") || tag === "position";
+}
+
+function isOpenPositionTag(tag: string): boolean {
+  return tag.includes("openposition") || tag.endsWith(":openposition");
 }
 
 function parseAttributes(attrString: string): Record<string, string> {
   const attrs: Record<string, string> = {};
-  const attrRegex = /(\w+)="([^"]*)"/g;
+  const attrRegex = /([A-Za-z0-9_:.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
   let m: RegExpExecArray | null;
   while ((m = attrRegex.exec(attrString)) !== null) {
-    attrs[m[1].toLowerCase()] = m[2];
+    const key = m[1].toLowerCase();
+    const value = (m[2] ?? m[3] ?? "").trim();
+    attrs[key] = value;
   }
   return attrs;
+}
+
+function buildIbkrRow(attrs: Record<string, string>, reportDate: string): IbkrReportRow | null {
+  const symbol = normalizeSymbol(attrs.symbol || attrs.underlyingsymbol || "");
+  const quantityRaw = attrs.position || attrs.quantity || attrs.qty;
+  if (!symbol || quantityRaw === undefined) return null;
+
+  const quantity = toFloat(quantityRaw);
+  if (!Number.isFinite(quantity) || quantity === 0) return null;
+
+  const costBasisPrice = toFloat(attrs.costbasisprice || attrs.avgcost || attrs.avg_price);
+  const totalCost = toFloat(attrs.costbasismoney || attrs.costbasis);
+  const avgCost = costBasisPrice || (quantity ? totalCost / quantity : 0);
+
+  const marketValue = toFloat(attrs.positionvalue || attrs.marketvalue || attrs.currentvalue);
+  const unrealizedPnl = toFloat(attrs.fifopnlunrealized || attrs.unrealizedpl || attrs.unrealized_pnl);
+  const currency = (attrs.currency || "USD").trim().toUpperCase();
+
+  return {
+    report_date: reportDate,
+    symbol,
+    quantity,
+    avg_cost: avgCost,
+    market_value: marketValue,
+    unrealized_pnl: unrealizedPnl,
+    currency,
+    parsed_payload: JSON.stringify(attrs),
+  };
+}
+
+function mergeRowsBySymbolCurrency(rows: IbkrReportRow[]): IbkrReportRow[] {
+  const merged = new Map<string, IbkrReportRow>();
+
+  for (const row of rows) {
+    const key = `${row.symbol}||${row.currency}`;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, { ...row });
+      continue;
+    }
+
+    const currentCostValue = current.avg_cost * current.quantity;
+    const incomingCostValue = row.avg_cost * row.quantity;
+    const mergedQty = current.quantity + row.quantity;
+
+    current.quantity = mergedQty;
+    if (mergedQty !== 0) {
+      current.avg_cost = (currentCostValue + incomingCostValue) / mergedQty;
+    }
+    current.market_value += row.market_value;
+    current.unrealized_pnl += row.unrealized_pnl;
+  }
+
+  return Array.from(merged.values());
+}
+
+function normalizeSymbol(raw: string): string {
+  return raw.replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+function parseDateToIso(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{8}$/.test(trimmed)) {
+    const normalized = `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
+    const parsed = new Date(`${normalized}T00:00:00Z`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const parsed = new Date(`${trimmed}T00:00:00Z`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
+    const [mm, dd, yyyy] = trimmed.split("/");
+    const normalized = `${yyyy}-${mm}-${dd}`;
+    const parsed = new Date(`${normalized}T00:00:00Z`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
 function toFloat(value: string | undefined): number {
